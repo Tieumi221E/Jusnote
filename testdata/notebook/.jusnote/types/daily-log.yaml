@@ -1,0 +1,25 @@
+# 这份夹具把日志放在 logs/ 子目录，掩盖掉内置的根目录默认值。
+id: daily-log
+name: 日志
+style: list
+file: "logs/{YYYY-MM}.md"
+title: "# {YYYY-MM}"
+unit: "## {YYYY-MM-DD}"
+sections:
+  - name: 身体
+    kind: fields
+    fields:
+      - {key: 体重, type: number}
+      - {key: 步数, type: integer}
+  - name: 饮食
+    kind: fields
+    fields:
+      - {key: 早餐}
+      - {key: 午餐}
+      - {key: 晚餐}
+  - name: 收支
+    kind: money
+  - name: 生活
+    kind: free
+  - name: 工作
+    kind: free

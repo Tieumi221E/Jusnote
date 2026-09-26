@@ -1,0 +1,24 @@
+# Local builds
+bin/
+dist/
+
+# Built editor page (npm --prefix web run build); keep only the placeholder.
+!internal/ui/dist/
+internal/ui/dist/*
+!internal/ui/dist/.gitkeep
+
+# Editor / OS
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Node (web frontend)
+node_modules/
+
+# The test notebook gets a git repo and caches if opened directly.
+testdata/**/.git/
+testdata/**/.jusnote/cache/
+testdata/**/.jusnote/backup/
+
+# Development research log: kept on disk, deliberately not tracked.
+research-log/

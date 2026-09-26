@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'">
+<title>Jusnote</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="editor.css">
+<script src="prefs.js"></script>
+</head>
+<body>
+<div id="stage">
+  <section id="canvas">
+    <div id="editor"></div>
+    <div id="preview" hidden></div>
+
+    <button id="pill" class="pill">
+      <img class="mark day" src="icon-64.png" alt="">
+      <img class="mark night" src="icon-64-dark.png" alt="">
+      <span id="nb-name"></span>
+      <span id="file-name"></span>
+      <span class="chev" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M6 8l4 4 4-4"/></svg></span>
+    </button>
+
+    <div id="toolbar" class="pill">
+      <button id="btn-files"></button>
+      <button id="btn-search"></button>
+      <button id="btn-rail"></button>
+      <button id="btn-render"></button>
+      <button id="btn-palette"></button>
+      <button id="btn-settings"></button>
+    </div>
+
+    <div id="statusbar" class="bar">
+      <span id="st-path"></span>
+      <span class="grow"></span>
+      <button id="st-git" class="st"></button>
+      <span id="st-words"></span>
+      <span id="st-pos"></span>
+      <span id="st-save"></span>
+    </div>
+  </section>
+
+  <aside id="rail" class="panel layer">
+    <section>
+      <h3 id="h-outline"></h3>
+      <ul id="outline"></ul>
+    </section>
+    <section>
+      <h3 id="h-changes"></h3>
+      <ul id="changes"></ul>
+    </section>
+    <section>
+      <h3><span id="h-uncommitted"></span><span class="grow"></span><button id="commit-all" class="text"></button></h3>
+      <ul id="uncommitted"></ul>
+    </section>
+    <section>
+      <h3 id="h-recent"></h3>
+      <ul id="recent"></ul>
+    </section>
+  </aside>
+</div>
+
+<div id="nb-popover" class="panel layer">
+  <div class="pop-title" id="t-notebooks"></div>
+  <ul id="nb-recent"></ul>
+  <button id="nb-open" class="wide"></button>
+</div>
+
+<div id="settings" class="panel layer">
+  <div class="set-row"><span id="l-theme"></span><div class="seg" id="set-theme"><button data-v="light"></button><button data-v="dark"></button></div></div>
+  <div class="set-row"><span id="l-lang"></span><div class="seg" id="set-lang"><button data-v="zh">中文</button><button data-v="ja">日本語</button></div></div>
+  <div class="set-row"><span id="l-font"></span><div class="seg" id="set-font"><button data-v="sans"></button><button data-v="mono"></button></div></div>
+  <div class="set-row"><span id="l-size"></span><div class="stepper"><button id="size-dec">−</button><span id="size-val"></span><button id="size-inc">＋</button></div></div>
+  <div class="set-row"><span id="l-wrap"></span><button id="set-wrap" class="switch" role="switch"></button></div>
+  <div class="set-row"><span id="l-numbers"></span><button id="set-numbers" class="switch" role="switch"></button></div>
+  <div class="set-row"><span id="l-guides"></span><button id="set-guides" class="switch" role="switch"></button></div>
+  <div class="set-sep"></div>
+  <button id="set-help" class="wide"></button>
+  <button id="set-log" class="wide"></button>
+</div>
+
+<div id="files-panel" class="panel layer">
+  <header>
+    <span id="t-notes"></span>
+    <span class="grow"></span>
+    <button id="new-note" class="text"></button>
+  </header>
+  <ul id="files" role="tree"></ul>
+</div>
+
+<div id="menu" class="panel layer" role="menu"></div>
+
+<div id="empty" class="layer">
+  <div class="empty-card">
+    <p id="t-empty"></p>
+    <button id="empty-new" class="primary"></button>
+  </div>
+</div>
+
+<div id="overlay" class="layer">
+  <div id="palette" class="panel">
+    <input id="palette-input" autocomplete="off" spellcheck="false">
+    <ul id="palette-list" role="listbox"></ul>
+  </div>
+</div>
+
+<div id="help" class="layer">
+  <div class="help-card panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <h2 id="help-title"></h2>
+    <dl id="help-keys"></dl>
+    <div class="help-foot"><span id="help-version"></span><span class="grow"></span><button id="help-done" class="primary"></button></div>
+  </div>
+</div>
+
+<div id="welcome" class="layer">
+  <div class="welcome-card panel">
+    <img class="welcome-mark day" src="icon-64.png" alt="">
+    <img class="welcome-mark night" src="icon-64-dark.png" alt="">
+    <h1>Jusnote</h1>
+    <p id="t-welcome"></p>
+    <button id="pick-folder" class="primary"></button>
+    <ul id="welcome-recent"></ul>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

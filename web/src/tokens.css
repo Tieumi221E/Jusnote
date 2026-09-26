@@ -1,0 +1,114 @@
+/* Jusnote shares Jusplay's design tokens: one font (Jus Sans, a subset of
+   Source Han Sans 2.005), the two materials (day ice glass, night navy
+   glass), five radii, and the two springs. The editor adds a monospace
+   stack for code and for the text column when wanted. */
+@font-face { font-family: "Jus Sans"; src: url(fonts/jus-sans-400.woff2) format("woff2"); font-weight: 100 549; font-display: block; }
+@font-face { font-family: "Jus Sans"; src: url(fonts/jus-sans-700.woff2) format("woff2"); font-weight: 550 1000; font-display: block; }
+:root {
+  --font: "Jus Sans";
+  /* Code and the monospace text option: a system monospace face for Latin,
+     Jus Sans for CJK (no monospace face on Windows has it). */
+  --font-mono: "Cascadia Mono", Consolas, "Jus Sans", monospace;
+  --editor-font: var(--font);
+}
+:root[data-font=mono] { --editor-font: var(--font-mono); }
+
+/* Materials and shapes (docs/design-language.md §六, §七). The theme is the
+   material: day is ice glass, night is navy glass, everywhere. */
+:root {
+  --glass-rgb: 14, 21, 44;
+  --glass-bar: rgba(var(--glass-rgb), .86);
+  --glass-panel: rgba(var(--glass-rgb), .97);
+  --sheet: rgb(var(--glass-rgb));
+  --glass-line: rgba(120, 200, 255, .14);
+  --glass-hi: rgba(160, 200, 255, .08);
+  --fg: #e8eefb;
+  --muted: #9aa7c3;
+  --faint: #66728e;
+  --line: rgba(140, 170, 255, .12);
+  --field: rgba(140, 170, 255, .08);
+  --field-hover: rgba(140, 170, 255, .14);
+  --track: rgba(255, 255, 255, .18);
+  --accent: #6fc3ff;
+  --accent-2: #a897ff;
+  --grad: linear-gradient(100deg, #4fd3fd, #4c8dfa 55%, #a48cfc);
+  --glow: 0 0 20px rgba(79, 170, 253, .42);
+  --shadow: 0 18px 50px rgba(0, 4, 20, .55);
+  --ok: #5fd39a;
+  --warn: #efb95a;
+  --err: #ff7b7b;
+  --code: #c3b8ff;
+  --selection: rgba(111, 195, 255, .28);
+  --mark: rgba(239, 185, 90, .32);
+  color-scheme: dark;
+}
+:root[data-theme=light] {
+  --glass-rgb: 246, 250, 255;
+  --glass-line: rgba(90, 140, 220, .2);
+  --glass-hi: rgba(255, 255, 255, .95);
+  --fg: #11213a;
+  --muted: #52627c;
+  --faint: #8a97ad;
+  --line: rgba(80, 120, 200, .14);
+  --field: rgba(62, 110, 200, .06);
+  --field-hover: rgba(62, 110, 200, .11);
+  --track: rgba(40, 70, 130, .16);
+  --accent: #2b6fe6;
+  --accent-2: #7c63ee;
+  --grad: linear-gradient(100deg, #35c3f9, #3f7bf6 55%, #9a7cf5);
+  --glow: 0 0 20px rgba(63, 140, 246, .28);
+  --shadow: 0 16px 40px rgba(40, 70, 140, .14);
+  --ok: #1e9454;
+  --warn: #b7791f;
+  --err: #c83a3a;
+  --code: #6a4fd6;
+  --selection: rgba(43, 111, 230, .2);
+  --mark: rgba(239, 185, 90, .38);
+  color-scheme: light;
+}
+:root {
+  --r-cap: 999px;
+  --r-lg: 20px;
+  --r-md: 12px;
+  --r-sm: 8px;
+  --r-xs: 2px;
+}
+:root {
+  --t-fast: 100ms;
+  --t-quick: 160ms;
+  --t-base: 240ms;
+  --t-page: 360ms;
+  --ease-in: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-out: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --ease-move: cubic-bezier(0.2, 0, 0, 1);
+  --spring-smooth: linear(0.000, 0.034, 0.114, 0.215, 0.321, 0.423, 0.516, 0.599, 0.671, 0.732, 0.783, 0.825, 0.860, 0.888, 0.911, 0.930, 0.944, 0.956, 0.966, 0.973, 0.979, 0.984, 0.987, 0.990, 0.992, 0.994, 0.995, 0.996, 0.997, 0.998, 0.998, 0.999, 1);
+  --spring-smooth-t: 529ms;
+  --spring-snappy: linear(0.000, 0.032, 0.110, 0.212, 0.322, 0.432, 0.535, 0.627, 0.707, 0.775, 0.831, 0.876, 0.912, 0.940, 0.961, 0.976, 0.987, 0.995, 1.000, 1.003, 1.005, 1.006, 1.006, 1.006, 1.005, 1.005, 1.004, 1.003, 1.003, 1.002, 1.002, 1.001, 1);
+  --spring-snappy-t: 418ms;
+  --move: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --move: 0;
+    --t-fast: 60ms;
+    --t-quick: 90ms;
+    --t-base: 120ms;
+    --t-page: 150ms;
+    --spring-smooth: var(--ease-move);
+    --spring-smooth-t: 120ms;
+    --spring-snappy: var(--ease-move);
+    --spring-snappy-t: 120ms;
+  }
+}
+.glass { background: var(--glass-panel); border: 1px solid var(--glass-line); box-shadow: var(--shadow), inset 0 1px 0 var(--glass-hi); }
+
+/* Key caps and tooltips (tip.ts), shared by every Jus app. */
+kbd { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--field);
+  font: 600 11.5px/20px var(--font); text-align: center; color: var(--fg); font-variant-numeric: tabular-nums; }
+.tip { position: fixed; z-index: 50; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+  border-radius: var(--r-sm); font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--tip-fg, #f2f3f6); background: var(--tip-bg, rgba(24, 26, 32, .94));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .25); opacity: 0; transform: translateY(calc(4px * var(--move))) scale(calc(1 - .03 * var(--move)));
+  transition: opacity var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out); }
+.tip.show { opacity: 1; transform: none; transition: opacity var(--t-fast) var(--ease-in), transform var(--spring-snappy-t) var(--spring-snappy); }
+.tip kbd { min-width: 0; padding: 0 5px; background: rgba(255, 255, 255, .14); color: inherit; opacity: .85; }
+:root[data-theme=light] .tip { --tip-fg: #f5f6f8; --tip-bg: rgba(28, 30, 36, .92); }
