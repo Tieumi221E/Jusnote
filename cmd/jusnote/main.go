@@ -1,376 +1,284 @@
-// Command jusnote is the desktop app and the external interface (CLI, and
-// later MCP) over the same files. Every command works on plain Markdown in
-// a notebook folder, so an agent can do anything the app can without the
-// app running: read, append, check and commit.
+// Command jusnote is the desktop app and the external interface over the
+// same files. Every command works on plain Markdown in a notebook folder
+// through internal/service — the same code the editor uses — so an agent
+// can do anything the app can without the app running.
+//
+// The command table below is the single description of the interface: the
+// usage text and `jusnote help -json` (for agents) are both made from it.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/Tieumi221E/Jusnote/internal/history"
 	"github.com/Tieumi221E/Jusnote/internal/notebook"
+	"github.com/Tieumi221E/Jusnote/internal/service"
 )
 
 // version is set by the build (-ldflags -X main.version=...).
 var version = "0.0.0-dev"
 
+// Exit codes, part of the interface (help -json lists them).
+const (
+	exitOK       = 0
+	exitFail     = 1
+	exitUsage    = 2
+	exitConflict = 3
+)
+
+type command struct {
+	Name    string   `json:"name"`
+	Args    string   `json:"args,omitempty"`
+	Summary string   `json:"summary"`
+	Flags   []string `json:"flags,omitempty"`
+	Writes  bool     `json:"writes"` // changes files in the notebook
+	run     func(c *ctx) error
+}
+
+// Flags shared by the commands that write.
+var provFlags = []string{"-author human|agent", "-model <provider>/<model>", "-run <session id>"}
+
+func commands() []command {
+	return []command{
+		{Name: "gui", Summary: "open the editor window (the default with no command)", Flags: []string{"-serve", "-selftest"}, run: nil},
+		{Name: "info", Summary: "the notebook and its git state", run: cmdInfo},
+		{Name: "list", Summary: "list notes (path, size, modified)", run: cmdList},
+		{Name: "read", Args: "<path>", Summary: "print a note; -json adds its version for write -base", run: cmdRead},
+		{Name: "write", Args: "<path>", Summary: "write a note from -text or stdin (atomic), then commit it", Writes: true,
+			Flags: append([]string{"-text <content>", "-file <path>", "-base <version>", "-m <message>", "-no-commit"}, provFlags...), run: cmdWrite},
+		{Name: "append", Args: "<path>", Summary: "add text at the end of a note (the rest is left byte for byte); creates the note if missing", Writes: true,
+			Flags: append([]string{"-text <content>", "-file <path>", "-no-commit"}, provFlags...), run: cmdAppend},
+		{Name: "attach", Args: "<note> <file>", Summary: "copy a file (e.g. an image) next to a note, into attachments/; prints the Markdown to insert", Writes: true,
+			Flags: append([]string{"-name <file name>", "-no-commit"}, provFlags...), run: cmdAttach},
+		{Name: "record", Args: "<paths...>", Summary: "after editing files with your own tools: record who changed them, for the commit that accepts the change",
+			Flags: provFlags, run: cmdRecord},
+		{Name: "capture", Summary: "append one entry to a record type's file (e.g. today's log)", Writes: true,
+			Flags: append([]string{"-type <id>", "-section <name>", "-text <entry>", "-file <path>", "-date YYYY-MM-DD", "-no-commit"}, provFlags...), run: cmdCapture},
+		{Name: "search", Args: "<query>", Summary: "lines containing the query in every note (ignoring case)", Flags: []string{"-limit <n>"}, run: cmdSearch},
+		{Name: "check", Args: "<path>", Summary: "check a note against its record type (the file, or -text / -file / stdin)", Flags: []string{"-text <content>", "-file <path>"}, run: cmdCheck},
+		{Name: "types", Summary: "the record types of this notebook: files, sections and rules", run: cmdTypes},
+		{Name: "links", Args: "<path>", Summary: "a note's links and the notes that link to it", run: cmdLinks},
+		{Name: "rename", Args: "<from> <to>", Summary: "move a note and update the links to it", Writes: true,
+			Flags: append([]string{"-no-links", "-no-commit"}, provFlags...), run: cmdRename},
+		{Name: "delete", Args: "<path>", Summary: "delete a note (its last content stays in .jusnote/backup)", Writes: true,
+			Flags: append([]string{"-no-commit"}, provFlags...), run: cmdDelete},
+		{Name: "status", Summary: "uncommitted files, with kind and recorded source", run: cmdStatus},
+		{Name: "diff", Args: "<path>", Summary: "a file against its last commit", run: cmdDiff},
+		{Name: "discard", Args: "<path>", Summary: "put a file back as it was at the last commit", Writes: true, run: cmdDiscard},
+		{Name: "commit", Args: "[paths...]", Summary: "commit the named files (or -all)", Writes: true,
+			Flags: append([]string{"-all", "-m <message>"}, provFlags...), run: cmdCommit},
+		{Name: "log", Args: "[path]", Summary: "recent commits (of one note when a path is given)", Flags: []string{"-limit <n>"}, run: cmdLog},
+		{Name: "show", Args: "<commit> <path>", Summary: "a note as it was in a commit", run: cmdShow},
+		{Name: "restore", Args: "<commit> <path>", Summary: "make a note's old version its current content, then commit", Writes: true,
+			Flags: append([]string{"-no-commit"}, provFlags...), run: cmdRestore},
+		{Name: "agents", Summary: "write AGENTS.md (and CLAUDE.md, GEMINI.md bridges) so coding agents know how to work here", Writes: true,
+			Flags: []string{"-force"}, run: cmdAgents},
+		{Name: "init", Summary: "create the notebook's git repository", Writes: true, run: cmdInit},
+		{Name: "help", Summary: "this list; -json for machines", run: nil},
+		{Name: "version", Summary: "print the version", run: nil},
+	}
+}
+
 func main() {
+	defer reportStats()
 	if len(os.Args) < 2 {
 		if err := cmdGUI(nil); err != nil {
-			fail(err)
+			fail(err, false)
 		}
 		return
 	}
-	cmd, args := os.Args[1], os.Args[2:]
-	var err error
-	switch cmd {
+	name, args := os.Args[1], os.Args[2:]
+	switch name {
 	case "version", "-version", "--version":
 		fmt.Println("jusnote", version)
 		return
-	case "help", "-h", "--help":
-		usage()
+	case "help", "-h", "--help", "-help":
+		help(hasFlag(args, "-json"))
 		return
 	case "gui":
-		err = cmdGUI(args)
-	case "info":
-		err = cmdInfo(args)
-	case "list":
-		err = cmdList(args)
-	case "read":
-		err = cmdRead(args)
-	case "write":
-		err = cmdWrite(args)
-	case "init":
-		err = cmdInit(args)
-	case "history":
-		err = cmdHistory(args)
-	default:
-		fmt.Fprintf(os.Stderr, "jusnote: unknown command %q\n", cmd)
-		usage()
-		os.Exit(2)
+		if err := cmdGUI(args); err != nil {
+			fail(err, false)
+		}
+		return
+	case "history": // 0.1.0 spelling: history log | history status
+		if len(args) > 0 && (args[0] == "log" || args[0] == "status") {
+			name, args = args[0], args[1:]
+		}
 	}
-	if err != nil {
-		fail(err)
+	for _, c := range commands() {
+		if c.Name == name && c.run != nil {
+			x := newCtx(c.Name, args)
+			if err := c.run(x); err != nil {
+				reportStats() // fail exits without running defers
+				fail(err, *x.json)
+			}
+			return
+		}
 	}
+	fmt.Fprintf(os.Stderr, "jusnote: unknown command %q (jusnote help)\n", name)
+	os.Exit(exitUsage)
 }
 
-// fail reports err where it can be seen (stderr, or a message box when
-// started without a console) and exits.
-func fail(err error) {
-	fmt.Fprintln(os.Stderr, "jusnote:", err)
-	showError(err)
-	os.Exit(1)
+func hasFlag(args []string, f string) bool {
+	for _, a := range args {
+		if a == f || a == "-"+f {
+			return true
+		}
+	}
+	return false
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `jusnote — plain-text notes, backed by git.
-
-Usage:
-  jusnote <command> [flags] [args]
-
-Commands:
-  gui              open the editor window (default with no command)
-  info             show the notebook and its git state
-  list             list notes
-  read <path>      print a note
-  write <path>     write a note (content from -text or stdin), then commit
-  init             create the notebook's git repository
-  history log      show recent commits
-  history status   show changed notes
-  version          print the version
-
-Common flags:
-  -notebook DIR    notebook folder (default ".")
-  -json            machine-readable output
-`)
+func help(asJSON bool) {
+	cs := commands()
+	if asJSON {
+		printJSON(map[string]any{
+			"name":     "jusnote",
+			"version":  version,
+			"about":    "Plain-Markdown notebook with git history. Every command takes -notebook DIR (default: the current folder) and -json.",
+			"commands": cs,
+			"exit":     map[string]string{"0": "ok", "1": "failed", "2": "usage error", "3": "conflict: the file changed since -base"},
+			"env":      map[string]string{"JUS_AUTHOR": "default for -author", "JUS_MODEL": "default for -model", "JUS_RUN": "default for -run"},
+			"errors":   "with -json, a failure prints {\"error\": \"…\", \"code\": n} on stderr",
+		})
+		return
+	}
+	var b strings.Builder
+	b.WriteString("jusnote — plain-Markdown notes with git history.\n\nUsage:\n  jusnote <command> [args] [flags]\n\nCommands:\n")
+	for _, c := range cs {
+		fmt.Fprintf(&b, "  %-24s %s\n", strings.TrimSpace(c.Name+" "+c.Args), c.Summary)
+		if len(c.Flags) > 0 {
+			fmt.Fprintf(&b, "  %-24s %s\n", "", strings.Join(c.Flags, "  "))
+		}
+	}
+	b.WriteString("\nEvery command: -notebook DIR (default \".\"), -json (machine-readable output).\n")
+	b.WriteString("Writes by an agent: pass -author agent -model … -run … (or set JUS_AUTHOR/JUS_MODEL/JUS_RUN);\n")
+	b.WriteString("with -no-commit the source is remembered and used when the user accepts the change.\n")
+	b.WriteString("Content: -file <path> (or a pipe) is safest; long -text through a shell may lose quotes and backticks.\n")
+	b.WriteString("Exit codes: 0 ok, 1 failed, 2 usage, 3 conflict.\n")
+	fmt.Print(b.String())
 }
 
-// common holds the flags every command shares.
-type common struct {
+// fail reports err where it can be seen — JSON on stderr for machines, a
+// line on stderr, or a message box when started without a console — and
+// exits with the error's code.
+func fail(err error, asJSON bool) {
+	code := exitFail
+	var u usageError
+	switch {
+	case errors.As(err, &u):
+		code = exitUsage
+	case errors.Is(err, notebook.ErrChanged):
+		code = exitConflict
+	}
+	if asJSON {
+		json.NewEncoder(os.Stderr).Encode(map[string]any{"error": err.Error(), "code": code})
+	} else {
+		fmt.Fprintln(os.Stderr, "jusnote:", err)
+		showError(err)
+	}
+	os.Exit(code)
+}
+
+type usageError struct{ msg string }
+
+func (e usageError) Error() string { return e.msg }
+
+// ctx is one command's flags and the notebook they point at.
+type ctx struct {
 	fs       *flag.FlagSet
+	name     string
+	args     []string
 	notebook *string
 	json     *bool
+	author   *string
+	model    *string
+	run      *string
+	noCommit *bool
+	pos      []string
 }
 
-func newFlags(name string) *common {
+func newCtx(name string, args []string) *ctx {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	return &common{
-		fs:       fs,
+	return &ctx{
+		fs: fs, name: name, args: args,
 		notebook: fs.String("notebook", ".", "notebook folder"),
-		json:     fs.Bool("json", false, "print machine-readable JSON"),
+		json:     fs.Bool("json", false, "machine-readable output"),
+		author:   fs.String("author", os.Getenv("JUS_AUTHOR"), "who writes: human or agent"),
+		model:    fs.String("model", os.Getenv("JUS_MODEL"), "the agent's model"),
+		run:      fs.String("run", os.Getenv("JUS_RUN"), "the agent's session or run id"),
+		noCommit: fs.Bool("no-commit", false, "write but do not commit"),
 	}
 }
 
-// parse allows flags before, between or after positional arguments, the
-// way a person is likely to type them.
-func parse(fs *flag.FlagSet, args []string, npos int) ([]string, error) {
-	var pos []string
+// parse reads the flags (anywhere among the arguments) and wants between
+// min and max positional arguments (max < 0: any number).
+func (c *ctx) parse(min, max int) error {
+	args := c.args
 	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
+		if err := c.fs.Parse(args); err != nil {
+			return usageError{c.name + ": " + err.Error()}
 		}
-		args = fs.Args()
+		args = c.fs.Args()
 		if len(args) == 0 {
 			break
 		}
-		pos = append(pos, args[0])
+		c.pos = append(c.pos, args[0])
 		args = args[1:]
 	}
-	if len(pos) != npos {
-		return nil, fmt.Errorf("want %d argument(s), got %d", npos, len(pos))
+	if len(c.pos) < min || (max >= 0 && len(c.pos) > max) {
+		return usageError{fmt.Sprintf("%s: wrong number of arguments (jusnote help)", c.name)}
 	}
-	return pos, nil
+	if a := *c.author; a != "" && a != "human" && a != "agent" {
+		return usageError{"-author must be human or agent"}
+	}
+	return nil
 }
 
-func cmdInfo(args []string) error {
-	c := newFlags("info")
-	if _, err := parse(c.fs, args, 0); err != nil {
-		return err
+func (c *ctx) prov() history.Provenance {
+	return history.Provenance{Author: *c.author, Model: *c.model, Run: *c.run}
+}
+
+func (c *ctx) open() (*service.Service, error) {
+	return service.Open(*c.notebook, false)
+}
+
+// out prints v as JSON with -json, and text otherwise.
+func (c *ctx) out(v any, text func()) error {
+	if *c.json {
+		return printJSON(v)
 	}
-	nb, err := notebook.Open(*c.notebook)
-	if err != nil {
-		return err
-	}
-	docs, err := nb.List()
-	if err != nil {
-		return err
-	}
-	isRepo := history.IsRepo(nb.Root())
-	info := map[string]any{
-		"root":  nb.Root(),
-		"vault": nb.Vault(),
-		"notes": len(docs),
-		"git":   isRepo,
-	}
-	if isRepo {
-		if repo, err := history.Open(nb.Root()); err == nil {
-			if changed, err := repo.Status(); err == nil {
-				info["changed"] = len(changed)
+	text()
+	return nil
+}
+
+// commitOrRecord commits paths now, or with -no-commit remembers who wrote
+// them for the commit that later accepts the change.
+func (c *ctx) commitOrRecord(svc *service.Service, subject string, paths ...string) (hash string, committed bool, err error) {
+	if *c.noCommit || svc.Repo == nil {
+		for _, p := range paths {
+			if svc.NB.Exists(p) {
+				if err := svc.Record(p, c.prov()); err != nil {
+					return "", false, err
+				}
 			}
 		}
+		return "", false, nil
 	}
-	if *c.json {
-		return printJSON(info)
-	}
-	fmt.Printf("notebook  %s\n", nb.Root())
-	fmt.Printf("vault     %s\n", nb.Vault())
-	fmt.Printf("notes     %d\n", len(docs))
-	fmt.Printf("git       %v\n", isRepo)
-	if n, ok := info["changed"]; ok {
-		fmt.Printf("changed   %v\n", n)
-	}
-	return nil
-}
-
-func cmdList(args []string) error {
-	c := newFlags("list")
-	if _, err := parse(c.fs, args, 0); err != nil {
-		return err
-	}
-	nb, err := notebook.Open(*c.notebook)
-	if err != nil {
-		return err
-	}
-	docs, err := nb.List()
-	if err != nil {
-		return err
-	}
-	if *c.json {
-		return printJSON(docs)
-	}
-	for _, d := range docs {
-		fmt.Println(d.Rel)
-	}
-	return nil
-}
-
-func cmdRead(args []string) error {
-	c := newFlags("read")
-	pos, err := parse(c.fs, args, 1)
-	if err != nil {
-		return err
-	}
-	nb, err := notebook.Open(*c.notebook)
-	if err != nil {
-		return err
-	}
-	data, err := nb.Read(pos[0])
-	if err != nil {
-		return err
-	}
-	if *c.json {
-		return printJSON(map[string]string{"rel": pos[0], "text": string(data)})
-	}
-	_, err = os.Stdout.Write(data)
-	return err
-}
-
-func cmdWrite(args []string) error {
-	c := newFlags("write")
-	text := c.fs.String("text", "", "content to write (otherwise read standard input)")
-	message := c.fs.String("m", "", "commit message")
-	noCommit := c.fs.Bool("no-commit", false, "do not commit after writing")
-	pos, err := parse(c.fs, args, 1)
-	if err != nil {
-		return err
-	}
-	rel := pos[0]
-
-	var data []byte
-	if *text != "" {
-		data = []byte(*text)
-	} else {
-		piped, err := isPiped(os.Stdin)
-		if err != nil {
-			return err
-		}
-		if !piped {
-			return fmt.Errorf("no content: pass -text or pipe it in")
-		}
-		if data, err = io.ReadAll(os.Stdin); err != nil {
-			return err
-		}
-	}
-
-	nb, err := notebook.Open(*c.notebook)
-	if err != nil {
-		return err
-	}
-	clean, err := nb.Write(rel, data)
-	if err != nil {
-		return err
-	}
-
-	committed, hash := false, ""
-	if !*noCommit && history.IsRepo(nb.Root()) {
-		repo, err := history.Open(nb.Root())
-		if err != nil {
-			return err
-		}
-		msg := *message
-		if msg == "" {
-			msg = "update " + clean
-		}
-		h, ok, err := repo.CommitPaths(msg, clean)
-		if err != nil {
-			return err
-		}
-		committed, hash = ok, h
-	}
-
-	if *c.json {
-		return printJSON(map[string]any{"rel": clean, "committed": committed, "hash": hash})
-	}
-	line := "wrote " + clean
-	if committed {
-		line += " (committed " + short(hash) + ")"
-	}
-	fmt.Println(line)
-	return nil
-}
-
-func cmdInit(args []string) error {
-	c := newFlags("init")
-	if _, err := parse(c.fs, args, 0); err != nil {
-		return err
-	}
-	nb, err := notebook.Open(*c.notebook)
-	if err != nil {
-		return err
-	}
-	repo, err := history.Ensure(nb.Root())
-	if err != nil {
-		return err
-	}
-	if *c.json {
-		return printJSON(map[string]string{"root": repo.Root()})
-	}
-	fmt.Println("repository ready at", repo.Root())
-	return nil
-}
-
-func cmdHistory(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("history needs a subcommand: log or status")
-	}
-	sub, rest := args[0], args[1:]
-	switch sub {
-	case "log":
-		return cmdHistoryLog(rest)
-	case "status":
-		return cmdHistoryStatus(rest)
-	default:
-		return fmt.Errorf("unknown history subcommand %q", sub)
-	}
-}
-
-func cmdHistoryLog(args []string) error {
-	c := newFlags("history log")
-	limit := c.fs.Int("limit", 20, "maximum commits to show")
-	if _, err := parse(c.fs, args, 0); err != nil {
-		return err
-	}
-	if !history.IsRepo(*c.notebook) {
-		return fmt.Errorf("no git repository in %s", *c.notebook)
-	}
-	repo, err := history.Open(*c.notebook)
-	if err != nil {
-		return err
-	}
-	commits, err := repo.Log(*limit)
-	if err != nil {
-		return err
-	}
-	if *c.json {
-		return printJSON(commits)
-	}
-	for _, cm := range commits {
-		fmt.Printf("%s  %s  %s\n", short(cm.Hash), cm.When.Format("2006-01-02 15:04"), cm.Message)
-	}
-	return nil
-}
-
-func cmdHistoryStatus(args []string) error {
-	c := newFlags("history status")
-	if _, err := parse(c.fs, args, 0); err != nil {
-		return err
-	}
-	if !history.IsRepo(*c.notebook) {
-		return fmt.Errorf("no git repository in %s", *c.notebook)
-	}
-	repo, err := history.Open(*c.notebook)
-	if err != nil {
-		return err
-	}
-	changed, err := repo.Status()
-	if err != nil {
-		return err
-	}
-	if *c.json {
-		return printJSON(changed)
-	}
-	for _, p := range changed {
-		fmt.Println(p)
-	}
-	return nil
-}
-
-func isPiped(f *os.File) (bool, error) {
-	info, err := f.Stat()
-	if err != nil {
-		return false, err
-	}
-	return info.Mode()&os.ModeCharDevice == 0, nil
+	return svc.Commit(subject, c.prov(), paths...)
 }
 
 func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
 }
 
@@ -379,4 +287,40 @@ func short(hash string) string {
 		return hash[:8]
 	}
 	return hash
+}
+
+func isPiped(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice == 0
+}
+
+// input is the -text flag when it was given (even empty), otherwise what
+// is piped into standard input — but an empty pipe is no input: agents'
+// shells often run commands with a closed or empty stdin, and that must
+// never turn into "write an empty note".
+func (c *ctx) input(text *string) ([]byte, bool, error) {
+	if isSet(c, "file") {
+		b, err := os.ReadFile(c.fs.Lookup("file").Value.String())
+		return b, err == nil, err
+	}
+	if isSet(c, "text") {
+		return []byte(*text), true, nil
+	}
+	if !isPiped(os.Stdin) {
+		return nil, false, nil
+	}
+	b, err := io.ReadAll(os.Stdin)
+	if err != nil || len(b) == 0 {
+		return nil, false, err
+	}
+	return b, true, nil
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

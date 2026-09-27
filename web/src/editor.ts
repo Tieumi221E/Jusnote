@@ -34,11 +34,12 @@ import {
   indentOnInput,
   bracketMatching,
 } from "@codemirror/language";
-import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
 import { lintKeymap, linter, forceLinting, type Diagnostic as LintDiagnostic } from "@codemirror/lint";
 import { tags } from "@lezer/highlight";
 import { api, type GitChange } from "./api.ts";
 import { L, prefs } from "./i18n.ts";
+import { wikiMarks, wikiCompletion, wikiAt } from "./wikilinks.ts";
 
 // Markdown marks (#, **, `, >, list bullets, link brackets) are faint, so
 // the text reads first; headings are larger and bold; code is monospace.
@@ -282,10 +283,12 @@ export function setLinkHandler(fn: (href: string) => void): void {
 
 const LINK_RE = /(jus:\/\/[^\s)>\]]+|https?:\/\/[^\s)>\]]+|mailto:[^\s)>\]]+)/g;
 
-/** The link under pos, if any: a bare URL, or a Markdown link's target. */
+/** The link under pos, if any: a wiki link ("wiki:" + target), a bare URL, or a Markdown link's target. */
 function linkAt(state: EditorState, pos: number): string | null {
   const line = state.doc.lineAt(pos);
   const col = pos - line.from;
+  const wiki = wikiAt(line.text, col);
+  if (wiki) return "wiki:" + wiki;
   for (const m of line.text.matchAll(LINK_RE)) {
     if (m.index <= col && col <= m.index + m[0].length) return m[0];
   }
@@ -294,6 +297,37 @@ function linkAt(state: EditorState, pos: number): string | null {
   }
   return null;
 }
+
+// Pasted or dropped files (images) are handed to the app, which stores them
+// next to the note and gets back the Markdown to insert.
+let onFiles: (files: File[]) => Promise<string | null> = async () => null;
+export function setFileHandler(fn: (files: File[]) => Promise<string | null>): void {
+  onFiles = fn;
+}
+
+function insertFiles(view: EditorView, files: File[], pos: number) {
+  void onFiles(files).then((md) => {
+    if (md) view.dispatch({ changes: { from: pos, insert: md }, selection: { anchor: pos + md.length } });
+  });
+}
+
+const fileDrop = EditorView.domEventHandlers({
+  paste(e, view) {
+    const files = [...(e.clipboardData?.files ?? [])];
+    if (!files.length) return false;
+    e.preventDefault();
+    insertFiles(view, files, view.state.selection.main.head);
+    return true;
+  },
+  drop(e, view) {
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (!files.length) return false;
+    e.preventDefault();
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? view.state.selection.main.head;
+    insertFiles(view, files, pos);
+    return true;
+  },
+});
 
 // Ctrl+click follows a link, as in code editors.
 const linkClick = EditorView.domEventHandlers({
@@ -379,7 +413,9 @@ function extensions(onUpdate: (u: ViewUpdate) => void): Extension[] {
     highlightActiveLine(),
     highlightSelectionMatches(),
     search({ top: true }),
+    autocompletion({ override: [wikiCompletion], icons: false, activateOnTyping: true }),
     keymap.of([
+      ...completionKeymap,
       { key: "Mod-b", run: toggleWrap("**") },
       { key: "Mod-i", run: toggleWrap("*") },
       { key: "Mod-e", run: toggleWrap("`") },
@@ -395,8 +431,10 @@ function extensions(onUpdate: (u: ViewUpdate) => void): Extension[] {
     markdown({ base: markdownLanguage }),
     EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
     codePlugin,
+    wikiMarks,
     lintExt,
     linkClick,
+    fileDrop,
     EditorView.contentAttributes.of({ spellcheck: "false", autocorrect: "off", autocapitalize: "off" }),
     wrapCompartment.of(prefs.wrap ? EditorView.lineWrapping : []),
     guideCompartment.of(prefs.guides ? guidePlugin : []),

@@ -20,5 +20,6 @@ testdata/**/.git/
 testdata/**/.jusnote/cache/
 testdata/**/.jusnote/backup/
 
-# Development research log: kept on disk, deliberately not tracked.
-research-log/
+# Development research log and local measurements: kept on disk, never tracked.
+docs/research-log/
+bench/

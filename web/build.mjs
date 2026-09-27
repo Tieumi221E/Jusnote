@@ -13,3 +13,10 @@ for (const f of ["index.html", "tokens.css", "editor.css", "icon-64.png", "icon-
   copyFileSync(new URL(`src/${f}`, import.meta.url), new URL(f, out));
 }
 cpSync(new URL("src/fonts/", import.meta.url), new URL("fonts/", out), { recursive: true });
+// KaTeX's stylesheet and its WOFF2 fonts only (every browser we run in reads WOFF2).
+const katex = new URL("node_modules/katex/dist/", import.meta.url);
+mkdirSync(new URL("katex/fonts/", out), { recursive: true });
+copyFileSync(new URL("katex.min.css", katex), new URL("katex/katex.min.css", out));
+for (const f of readdirSync(new URL("fonts/", katex))) {
+  if (f.endsWith(".woff2")) copyFileSync(new URL("fonts/" + f, katex), new URL("katex/fonts/" + f, out));
+}

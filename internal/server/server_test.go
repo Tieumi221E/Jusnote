@@ -70,7 +70,7 @@ func TestGuard(t *testing.T) {
 // alone.
 func TestSaveConflictAndPendingCommit(t *testing.T) {
 	s, base := start(t)
-	root := s.nb.Root()
+	root := s.svc.NB.Root()
 	if code, out := call(t, "PUT", base+"api/note", `{"path":"a.md","text":"one\n","base":""}`); code != 200 || out["committed"] != false {
 		t.Fatalf("autosave: %d %v", code, out)
 	}
@@ -85,11 +85,11 @@ func TestSaveConflictAndPendingCommit(t *testing.T) {
 	// c.md: autosaved and untouched since, so the pending commit takes it.
 	call(t, "PUT", base+"api/note", `{"path":"c.md","text":"c\n","base":""}`)
 	s.CommitPending()
-	changed, _ := s.repo.Status()
+	changed, _ := s.svc.Repo.Status()
 	if strings.Join(changed, ",") != "a.md,b.md" {
 		t.Fatalf("after commit: %v, want a.md (changed outside after the app wrote it) and b.md (outside) left for review", changed)
 	}
-	if !s.repo.Tracked("c.md") {
+	if !s.svc.Repo.Tracked("c.md") {
 		t.Fatal("the app's own autosave was not committed")
 	}
 }
@@ -100,7 +100,7 @@ func versionOf(s string) string { return notebook.VersionOf([]byte(s)) }
 // the app merely showed stays uncommitted.
 func TestCommitMineSkipsUnwritten(t *testing.T) {
 	s, base := start(t)
-	os.WriteFile(filepath.Join(s.nb.Root(), "shown.md"), []byte("never edited\n"), 0o644)
+	os.WriteFile(filepath.Join(s.svc.NB.Root(), "shown.md"), []byte("never edited\n"), 0o644)
 	if code, out := call(t, "POST", base+"api/commit", `{"paths":["shown.md"],"mine":true}`); code != 200 || out["committed"] != false {
 		t.Fatalf("mine commit of an unwritten file: %d %v", code, out)
 	}
@@ -108,7 +108,7 @@ func TestCommitMineSkipsUnwritten(t *testing.T) {
 	if code, out := call(t, "POST", base+"api/commit", `{"paths":["edited.md"],"mine":true}`); code != 200 || out["committed"] != true {
 		t.Fatalf("mine commit of an edited file: %d %v", code, out)
 	}
-	if s.repo.Tracked("shown.md") || !s.repo.Tracked("edited.md") {
+	if s.svc.Repo.Tracked("shown.md") || !s.svc.Repo.Tracked("edited.md") {
 		t.Fatal("want edited.md committed and shown.md not")
 	}
 }

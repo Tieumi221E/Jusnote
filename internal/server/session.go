@@ -20,11 +20,11 @@ type Session struct {
 const sessionMaxCursors = 200
 
 func (s *Server) sessionPath() string {
-	nb, _, _ := s.current()
-	if nb == nil {
+	svc := s.current()
+	if svc == nil {
 		return ""
 	}
-	return filepath.Join(nb.Vault(), "cache", "session.json")
+	return filepath.Join(svc.NB.Vault(), "cache", "session.json")
 }
 
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {

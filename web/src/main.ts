@@ -1,8 +1,6 @@
-import { marked } from "marked";
-import DOMPurify from "dompurify";
 import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
-import { api, ConflictError, type Doc, type GitChange, type Hit, type Session } from "./api.ts";
+import { api, ConflictError, type Backlink, type Change, type Doc, type GitChange, type Hit, type Session } from "./api.ts";
 import {
   createEditor,
   setDoc,
@@ -13,12 +11,17 @@ import {
   forceLint,
   applyEditorPrefs,
   setLinkHandler,
+  setFileHandler,
   isLoad,
 } from "./editor.ts";
 import { L, prefs, setPref, onLang, onPref, applyStatic, SIZE_MIN, SIZE_MAX, SIZE_DEFAULT, type StaticText } from "./i18n.ts";
 import { ask, isOpen as dialogOpen } from "./dialog.ts";
-import { wordCount, fuzzyScore, buildTree, notePath, type TreeNode } from "./text.ts";
+import { wordCount, fuzzyScore, buildTree, notePath, toggleTask, type TreeNode } from "./text.ts";
+import { renderInto } from "./markdown.ts";
+import { setNotes, setCurrentNote } from "./wikilinks.ts";
+import * as review from "./review.ts";
 import { initTips } from "./tip.ts";
+import { runSelftest } from "./selftest.ts";
 
 declare global {
   interface Window {
@@ -65,6 +68,10 @@ let opened = false;
 let root = "";
 let docs: Doc[] = [];
 let changedFiles: string[] = [];
+/** Uncommitted changes the editor did not make itself: what the review is for. */
+let toReview = new Map<string, Change>();
+/** Attachments pasted into the open note: committed together with it. */
+let attachedHere: string[] = [];
 let gitChanges: GitChange[] = [];
 
 let currentPath = "";
@@ -95,10 +102,8 @@ function toast(text: string, error = false) {
 
 type SaveState = "saved" | "dirty" | "saving" | "conflict" | "committed";
 let saveState: SaveState = "saved";
-let committedHash = "";
-function showSave(s: SaveState, hash = "") {
+function showSave(s: SaveState, _hash = "") {
   saveState = s;
-  committedHash = hash;
   paintSave();
 }
 function paintSave() {
@@ -106,11 +111,11 @@ function paintSave() {
   stSave.textContent = !currentPath
     ? ""
     : {
-        saved: L("已存盘", "保存済み"),
+        saved: L("已保存", "保存済み"),
         dirty: L("编辑中", "編集中"),
-        saving: L("存盘中…", "保存中…"),
+        saving: L("保存中…", "保存中…"),
         conflict: L("有冲突", "競合あり"),
-        committed: L("已提交", "コミット済み") + (committedHash ? " · " + committedHash.slice(0, 7) : ""),
+        committed: L("已保存", "保存済み"),
       }[saveState];
 }
 
@@ -124,7 +129,7 @@ function onUpdate(u: ViewUpdate) {
   if (u.docChanged) {
     scheduleOutline();
     scheduleWords();
-    if (rendered) preview.innerHTML = renderMarkdown(docText(editor));
+    if (rendered) renderPreview(docText(editor));
   }
   if (u.docChanged && !isLoad(u)) {
     dirty = true;
@@ -202,6 +207,7 @@ async function write(commit: boolean): Promise<void> {
       if (docText(editor) === text) dirty = false;
       if (r.committed) tracked = true;
       showSave(dirty ? "dirty" : r.committed ? "committed" : "saved", r.hash);
+      if (commit && r.committed) toast(L("已提交 ", "コミットしました ") + r.hash.slice(0, 7));
       void refreshGit();
     } catch (e) {
       if (e instanceof ConflictError) {
@@ -263,13 +269,14 @@ async function saveAndCommit() {
     return;
   }
   window.clearTimeout(autosaveTimer);
-  if (dirty) {
-    await write(true);
-    return;
-  }
+  if (dirty) await write(false);
+  if (conflict) return;
   try {
-    const r = await api.commit([currentPath]);
+    // The note and the attachments pasted into it go in one commit.
+    const r = await api.commit([currentPath, ...attachedHere]);
+    attachedHere = [];
     showSave(r.committed ? "committed" : "saved", r.hash);
+    toast(r.committed ? L("已提交 ", "コミットしました ") + r.hash.slice(0, 7) : L("没有要提交的改动", "コミットする変更はありません"));
     if (r.committed) tracked = true;
     void refreshGit();
   } catch (e) {
@@ -286,8 +293,29 @@ async function leaveNote(): Promise<boolean> {
     await resolveConflict();
     if (conflict) return false;
   }
-  await api.commit([currentPath], { mine: true }).catch(() => undefined);
+  await api.commit([currentPath, ...attachedHere], { mine: true }).catch(() => undefined);
+  attachedHere = [];
   return true;
+}
+
+/** Re-reads the open note from disk (after a discard or restore), keeping the cursor. */
+async function reloadCurrent() {
+  if (!currentPath) return;
+  try {
+    const note = await api.read(currentPath);
+    version = note.version;
+    tracked = note.tracked;
+    replaceDoc(editor, note.text);
+    dirty = false;
+    conflict = false;
+    showSave("saved");
+    await refreshGutter();
+  } catch {
+    // Gone (a discarded new file): show another note.
+    closeFile();
+    await refreshFiles();
+    if (docs.length) await openFile(docs[0].rel);
+  }
 }
 
 // Outside edits: while the buffer is clean, a changed file is reloaded in
@@ -344,9 +372,10 @@ function renderFiles() {
         items.push(li);
         if (open) walk(n.children, depth + 1);
       } else {
-        li.className = "file" + (n.path === currentPath ? " active" : "") + (changedFiles.includes(n.path) ? " changed" : "");
+        const rv = toReview.get(n.path);
+        li.className = "file" + (n.path === currentPath ? " active" : "") + (rv ? " review" + (rv.source?.author === "agent" ? " agent" : "") : changedFiles.includes(n.path) ? " changed" : "");
         li.textContent = n.name.replace(/\.(md|markdown)$/i, "");
-        li.title = n.path;
+        li.title = rv ? `${n.path} · ${rv.source?.author === "agent" ? L("agent 改过，待审阅", "agent が変更・レビュー待ち") : L("别处改过，待审阅", "外部で変更・レビュー待ち")}` : n.path;
         li.addEventListener("click", () => {
           void openFile(n.path);
           if (innerWidth < 900) toggleFiles(false);
@@ -366,6 +395,7 @@ function renderFiles() {
 
 async function refreshFiles() {
   docs = opened ? await api.list().catch(() => []) : [];
+  setNotes(docs);
   renderFiles();
   showEmpty(opened && docs.length === 0);
 }
@@ -409,11 +439,36 @@ function closeMenu() {
   menu.classList.remove("open");
 }
 
+// Back / forward through the notes you opened (Alt+← / Alt+→, mouse side buttons).
+const back: { path: string; pos: number }[] = [];
+const forward: { path: string; pos: number }[] = [];
+let travelling = false;
+
+async function travel(from: typeof back, to: typeof back) {
+  const where = from.pop();
+  if (!where) return;
+  if (currentPath) to.push({ path: currentPath, pos: editor.state.selection.main.head });
+  travelling = true;
+  try {
+    await openFile(where.path, where.pos);
+  } finally {
+    travelling = false;
+  }
+}
+const goBack = () => travel(back, forward);
+const goForward = () => travel(forward, back);
+
 async function openFile(path: string, pos?: number) {
   if (path !== currentPath && !(await leaveNote())) return;
+  if (!travelling && currentPath && path !== currentPath) {
+    back.push({ path: currentPath, pos: editor.state.selection.main.head });
+    if (back.length > 100) back.shift();
+    forward.length = 0;
+  }
   try {
     const note = await api.read(path);
     currentPath = path;
+    setCurrentNote(path);
     version = note.version;
     tracked = note.tracked;
     dirty = false;
@@ -426,11 +481,12 @@ async function openFile(path: string, pos?: number) {
     paintTitle();
     renderFiles();
     renderOutline();
-    if (rendered) preview.innerHTML = renderMarkdown(note.text);
+    if (rendered) renderPreview(note.text);
     updatePos();
     showEmpty(false);
     saveSession();
-    await refreshGutter();
+    scheduleBacklinks();
+    await refreshGit(); // leaving the last note may just have committed it
   } catch (e) {
     toast(L("打不开：", "開けません：") + msg(e), true);
   }
@@ -481,10 +537,15 @@ async function newNote(dir = "") {
     ],
     cancel: false,
   });
-  const path = notePath(text);
-  if (!value || !path || path.endsWith("/.md")) return;
-  if (docs.some((d) => d.rel.toLowerCase() === path.toLowerCase())) {
-    await openFile(path);
+  if (value) await createNote(notePath(text));
+}
+
+/** Creates a note with its title as the first line and opens it (or opens it if it exists). */
+async function createNote(path: string) {
+  if (!path || path.endsWith("/.md")) return;
+  const hit = docs.find((d) => d.rel.toLowerCase() === path.toLowerCase());
+  if (hit) {
+    await openFile(hit.rel);
     return;
   }
   const title = path.replace(/^.*\//, "").replace(/\.(md|markdown)$/i, "");
@@ -500,9 +561,10 @@ async function newNote(dir = "") {
 
 async function renameNote(path = currentPath) {
   if (!path) return;
-  const { value, text } = await ask({
+  const { value, text, checked } = await ask({
     title: L("重命名", "名前を変更"),
     input: { value: path.replace(/\.(md|markdown)$/i, ""), select: [path.lastIndexOf("/") + 1, path.replace(/\.(md|markdown)$/i, "").length] },
+    check: { label: L("同时更新指向它的链接", "このノートへのリンクも更新する"), value: true },
     choices: [
       { label: L("取消", "キャンセル"), value: false },
       { label: L("重命名", "変更"), value: true, primary: true },
@@ -513,13 +575,14 @@ async function renameNote(path = currentPath) {
   if (!value || !to || to === path) return;
   if (path === currentPath && !(await leaveNote())) return;
   try {
-    const r = await api.rename(path, to);
+    const r = await api.rename(path, to, checked);
     if (session.cursors[path] !== undefined) session.cursors[r.path] = session.cursors[path];
     await refreshFiles();
     if (path === currentPath) {
       currentPath = "";
       await openFile(r.path, editor.state.selection.main.head);
     }
+    if (r.updated.length) toast(L(`已更新 ${r.updated.length} 篇笔记里的链接`, `${r.updated.length} 件のノートのリンクを更新しました`));
     void refreshGit();
   } catch (e) {
     toast(L("无法重命名：", "名前を変更できません：") + msg(e), true);
@@ -575,6 +638,8 @@ async function copyLink(path = currentPath) {
 // --- rail: outline, changes, history -------------------------------------------------
 
 let headingLines: number[] = [];
+const OUTLINE_MAX = 300;
+let markedHeading = -1;
 function renderOutline() {
   const doc = editor.state.doc;
   const items: HTMLLIElement[] = [];
@@ -586,22 +651,28 @@ function renderOutline() {
     if (inFence) continue;
     const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(text);
     if (!m) continue;
+    headingLines.push(i);
+    if (items.length >= OUTLINE_MAX) continue; // a note with thousands of headings: list the first ones
     const li = document.createElement("li");
     li.className = "lv" + m[1].length + " click";
     li.textContent = m[2];
     li.addEventListener("click", () => gotoLine(i));
     items.push(li);
-    headingLines.push(i);
   }
+  if (headingLines.length > OUTLINE_MAX) items.push(emptyItem(L(`…还有 ${headingLines.length - OUTLINE_MAX} 个标题`, `…ほか ${headingLines.length - OUTLINE_MAX} 件の見出し`)));
   if (!items.length) items.push(emptyItem(currentPath ? L("没有标题", "見出しなし") : "—"));
   outlineEl.replaceChildren(...items);
+  markedHeading = -1;
   markOutline(doc.lineAt(editor.state.selection.main.head).number);
 }
 
 function markOutline(line: number) {
   let cur = -1;
   for (let k = 0; k < headingLines.length && headingLines[k] <= line; k++) cur = k;
-  outlineEl.querySelectorAll("li").forEach((li, k) => li.classList.toggle("cur", k === cur));
+  if (cur === markedHeading) return;
+  outlineEl.children[markedHeading]?.classList.remove("cur");
+  if (cur < OUTLINE_MAX) outlineEl.children[cur]?.classList.add("cur");
+  markedHeading = cur;
 }
 
 let outlineTimer = 0;
@@ -633,20 +704,61 @@ function renderChanges() {
 }
 
 function renderUncommitted() {
-  $("commit-all").hidden = changedFiles.length === 0;
-  if (!changedFiles.length) {
-    uncommittedEl.replaceChildren(emptyItem(opened ? L("全部已提交", "すべてコミット済み") : "—"));
+  const pending = [...toReview.keys()];
+  $("commit-all").hidden = pending.length === 0;
+  if (!pending.length) {
+    uncommittedEl.replaceChildren(emptyItem(opened ? L("没有待审阅的改动", "レビュー待ちの変更はありません") : "—"));
     return;
   }
   uncommittedEl.replaceChildren(
-    ...changedFiles.map((p) => {
+    ...pending.map((p) => {
       const li = document.createElement("li");
       li.textContent = p;
       li.title = p;
-      if (/\.(md|markdown)$/i.test(p) && !p.startsWith(".")) {
-        li.className = "click";
-        li.addEventListener("click", () => void openFile(p));
-      }
+      li.className = "click";
+      li.addEventListener("click", () => void review.openReview(p));
+      return li;
+    }),
+  );
+}
+
+// Links to the open note from elsewhere, in the rail.
+let backTimer = 0;
+function scheduleBacklinks() {
+  window.clearTimeout(backTimer);
+  backTimer = window.setTimeout(() => void renderBacklinks(), 400);
+}
+async function renderBacklinks() {
+  const el = $<HTMLUListElement>("backlinks");
+  if (!currentPath || !rail.classList.contains("open")) {
+    if (!currentPath) el.replaceChildren(emptyItem("—"));
+    return;
+  }
+  const path = currentPath;
+  let back: Backlink[] = [];
+  try {
+    back = (await api.links(path)).back;
+  } catch {
+    return;
+  }
+  if (path !== currentPath) return;
+  if (!back.length) {
+    el.replaceChildren(emptyItem(L("还没有笔记链接到这里", "ここへのリンクはまだありません")));
+    return;
+  }
+  el.replaceChildren(
+    ...back.map((b) => {
+      const li = document.createElement("li");
+      li.className = "click back";
+      const from = document.createElement("span");
+      from.className = "from";
+      from.textContent = b.from.replace(/\.(md|markdown)$/i, "");
+      const text = document.createElement("span");
+      text.className = "sub";
+      text.textContent = b.text;
+      li.append(from, text);
+      li.title = `${b.from}:${b.line}`;
+      li.addEventListener("click", () => void openFile(b.from).then(() => gotoLine(b.line)));
       return li;
     }),
   );
@@ -695,68 +807,62 @@ async function refreshGit() {
     renderUncommitted();
     return;
   }
-  changedFiles = await api.status().catch(() => changedFiles);
-  const n = changedFiles.length;
-  stGit.textContent = n ? L(`${n} 个未提交`, `未コミット ${n}`) : L("已全部提交", "すべてコミット済み");
-  stGit.classList.toggle("pending", n > 0);
+  const cs = await api.changes().catch(() => null);
+  if (cs) {
+    changedFiles = cs.map((c) => c.path);
+    toReview = new Map(cs.filter((c) => !c.mine).map((c) => [c.path, c]));
+  }
+  const r = toReview.size;
+  stGit.textContent = r ? L(`${r} 处待审阅`, `レビュー待ち ${r}`) : "";
+  stGit.hidden = r === 0;
+  stGit.classList.toggle("pending", r > 0);
   renderUncommitted();
   renderFiles();
   await Promise.all([refreshGutter(), rail.classList.contains("open") ? renderRecent() : undefined]);
 }
 
+/** Review of the uncommitted changes (the old "commit everything" goes through it). */
 async function commitAll() {
-  if (!changedFiles.length) return;
   if (!(await leaveNote())) return;
-  const { value } = await ask({
-    title: L(`提交全部 ${changedFiles.length} 个改动？`, `${changedFiles.length} 件の変更をすべてコミットしますか？`),
-    body: changedFiles.slice(0, 12).join("\n") + (changedFiles.length > 12 ? "\n…" : ""),
-    choices: [
-      { label: L("取消", "キャンセル"), value: false },
-      { label: L("提交", "コミット"), value: true, primary: true },
-    ],
-    cancel: false,
-  });
-  if (!value) return;
-  try {
-    const r = await api.commit([], { all: true });
-    toast(r.committed ? L("已提交 ", "コミットしました ") + r.hash.slice(0, 7) : L("没有要提交的", "コミットするものはありません"));
-    tracked = true;
-    await refreshGit();
-    await renderRecent();
-  } catch (e) {
-    toast(L("提交失败：", "コミットできません：") + msg(e), true);
-  }
+  await review.openReview();
 }
 
 // --- rendered Markdown view ------------------------------------------------------
 
-function renderMarkdown(text: string): string {
-  const html = marked.parse(text, { gfm: true }) as string;
-  return '<div class="md">' + rewriteImages(DOMPurify.sanitize(html, { ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|jus):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i })) + "</div>";
+function noteDir(): string {
+  return currentPath.includes("/") ? currentPath.slice(0, currentPath.lastIndexOf("/")) : "";
 }
 
-// Relative image sources are read through the notebook's raw endpoint, so
-// a note can show pictures that sit next to it.
-function rewriteImages(html: string): string {
-  const tpl = document.createElement("template");
-  tpl.innerHTML = html;
-  const dir = currentPath.includes("/") ? currentPath.slice(0, currentPath.lastIndexOf("/")) : "";
-  tpl.content.querySelectorAll("img").forEach((img) => {
-    const src = img.getAttribute("src") ?? "";
-    if (src && !/^([a-z][a-z0-9+.-]*:|\/)/i.test(src)) {
-      const rel = dir ? dir + "/" + src : src;
-      img.setAttribute("src", "api/raw?path=" + encodeURIComponent(decodeURIComponent(rel)));
-    }
+function renderPreview(text: string) {
+  renderInto(preview, text, noteDir());
+}
+
+/** Opens the note a wiki link names; offers to create it when there is none. */
+async function followWiki(target: string) {
+  const { path } = await api.resolve(target, currentPath).catch(() => ({ path: "" }));
+  if (path) {
+    await openFile(path);
+    return;
+  }
+  const { value } = await ask({
+    title: L(`还没有「${target}」`, `「${target}」はまだありません`),
+    body: L("要新建这篇笔记吗？", "このノートを作成しますか？"),
+    choices: [
+      { label: L("取消", "キャンセル"), value: false },
+      { label: L("新建", "作成"), value: true, primary: true },
+    ],
+    cancel: false,
   });
-  tpl.content.querySelectorAll("input[type=checkbox]").forEach((c) => c.setAttribute("disabled", ""));
-  return tpl.innerHTML;
+  if (value) await createNote(target.includes("/") ? notePath(target) : notePath((noteDir() ? noteDir() + "/" : "") + target));
 }
 
-// Links: jus://note opens that note here, web links go to the system
-// browser, a relative .md link opens that note, and nothing navigates the
-// page away.
+// Links: [[wiki]] resolves like the server does, jus://note opens that note
+// here, web links go to the system browser, a relative .md link opens that
+// note, and nothing navigates the page away.
 function followLink(href: string) {
-  if (href.startsWith("jus://note/")) {
+  if (href.startsWith("wiki:")) {
+    void followWiki(href.slice(5));
+  } else if (href.startsWith("jus://note/")) {
     const u = href.slice("jus://note/".length);
     const [p, query = ""] = u.split("?");
     const line = Number(new URLSearchParams(query).get("line")) || 0;
@@ -779,16 +885,65 @@ function followLink(href: string) {
 setLinkHandler(followLink);
 
 preview.addEventListener("click", (e) => {
-  const a = (e.target as HTMLElement).closest("a");
+  const t = e.target as HTMLElement;
+  // A task box writes back to the note (and autosaves like typing).
+  if (t instanceof HTMLInputElement && t.type === "checkbox" && t.dataset.task) {
+    e.preventDefault();
+    const next = toggleTask(docText(editor), Number(t.dataset.task));
+    if (next !== null) replaceText(next);
+    return;
+  }
+  const a = t.closest("a");
   if (!a) return;
   e.preventDefault();
-  followLink(a.getAttribute("href") ?? "");
+  if (a.dataset.wiki) void followWiki(a.dataset.wiki);
+  else followLink(a.getAttribute("href") ?? "");
+});
+
+/** Replaces the whole note as an edit (undoable, autosaved), keeping the preview's scroll. */
+function replaceText(text: string) {
+  const top = preview.scrollTop;
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } });
+  preview.scrollTop = top;
+}
+
+// Pasted or dropped files go next to the note, in "attachments/".
+setFileHandler(async (files) => {
+  if (!currentPath) return null;
+  const out: string[] = [];
+  for (const f of files) {
+    if (f.size > 50 << 20) {
+      toast(L("文件太大（上限 50 MB）：", "ファイルが大きすぎます（上限 50 MB）：") + f.name, true);
+      continue;
+    }
+    const data = await new Promise<string>((ok, bad) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result).replace(/^data:[^,]*,/, ""));
+      r.onerror = () => bad(r.error);
+      r.readAsDataURL(f);
+    });
+    let name = f.name || "file";
+    if (/^image\.\w+$/i.test(name)) {
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, "0");
+      name = `image-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${name.slice(name.lastIndexOf("."))}`;
+    }
+    try {
+      const r = await api.attach(currentPath, name, data);
+      attachedHere.push(r.path);
+      const label = name.replace(/\.[^.]+$/, "").replace(/[[\]]/g, "");
+      out.push(f.type.startsWith("image/") ? `![${label}](${r.link})` : `[${name.replace(/[[\]]/g, "")}](${r.link})`);
+    } catch (e) {
+      toast(L("无法保存附件：", "添付ファイルを保存できません：") + msg(e), true);
+    }
+  }
+  return out.length ? out.join("\n") : null;
 });
 
 function setRendered(on: boolean) {
   if (on && !currentPath) return;
   rendered = on;
-  if (on) preview.innerHTML = renderMarkdown(docText(editor));
+  if (on) renderPreview(docText(editor));
   preview.hidden = !on;
   editor.dom.style.visibility = on ? "hidden" : "";
   paintRenderButton();
@@ -891,7 +1046,10 @@ function toggleRail(force?: boolean) {
   rail.classList.toggle("open", show);
   document.body.classList.toggle("rail-open", show);
   $("btn-rail").setAttribute("aria-expanded", String(show));
-  if (show) void renderRecent();
+  if (show) {
+    void renderRecent();
+    void renderBacklinks();
+  }
 }
 
 // --- palette: commands and search -------------------------------------------------------
@@ -1037,7 +1195,9 @@ function commandList(): Command[] {
     { zh: "搜索笔记…", ja: "ノートを検索…", key: "Ctrl P", run: () => openPalette("search") },
     { zh: "在当前笔记中查找", ja: "このノート内を検索", key: "Ctrl F", run: () => findInNote(), when: hasNote },
     { zh: "保存并提交", ja: "保存してコミット", key: "Ctrl S", run: saveAndCommit, when: hasNote },
-    { zh: "提交全部改动…", ja: "すべての変更をコミット…", run: commitAll, when: () => changedFiles.length > 0 },
+    { zh: "审阅改动…", ja: "変更をレビュー…", key: "Ctrl Shift G", run: commitAll, when: () => toReview.size > 0 },
+    { zh: "这篇笔记的历史…", ja: "このノートの履歴…", key: "Ctrl Shift H", run: () => review.openHistory(currentPath), when: hasNote },
+    { zh: "插入指向笔记的链接", ja: "ノートへのリンクを挿入", key: "[[", run: () => insertAtCursor("[["), when: hasNote },
     { zh: "预览 / 源码", ja: "プレビュー / ソース", key: "Ctrl Shift V", run: () => setRendered(!rendered), when: hasNote },
     { zh: "文件", ja: "ファイル", key: "Ctrl O", run: () => toggleFiles() },
     { zh: "大纲与历史", ja: "アウトラインと履歴", key: "Ctrl J", run: () => toggleRail() },
@@ -1046,6 +1206,7 @@ function commandList(): Command[] {
     { zh: "复制当前行的 jus:// 链接", ja: "この行の jus:// リンクをコピー", run: () => copyLink(), when: hasNote },
     { zh: "在资源管理器中显示", ja: "エクスプローラーで表示", run: () => reveal(currentPath), when: hasNote },
     { zh: "快速记录到日志…", ja: "日誌にすばやく記録…", run: quickCapture },
+    { zh: "让 AI agent 能在这里工作…", ja: "AI エージェントがここで作業できるようにする…", run: prepareAgents, when: () => opened },
     { zh: "打开笔记本文件夹…", ja: "ノートブックのフォルダーを開く…", run: chooseNotebook },
     { zh: "增大字号", ja: "文字を大きく", key: "Ctrl +", run: () => bumpSize(1) },
     { zh: "减小字号", ja: "文字を小さく", key: "Ctrl -", run: () => bumpSize(-1) },
@@ -1053,6 +1214,8 @@ function commandList(): Command[] {
     { zh: "切换日间 / 夜间", ja: "ライト / ダークを切り替え", run: () => setPref("theme", prefs.theme === "dark" ? "light" : "dark") },
     { zh: "切换到日本語", ja: "中文に切り替え", run: () => setPref("lang", prefs.lang === "ja" ? "zh" : "ja") },
     { zh: "快捷键", ja: "ショートカット", key: "F1", run: showHelp },
+    { zh: "后退", ja: "戻る", key: "Alt ←", run: goBack, when: () => back.length > 0 },
+    { zh: "前进", ja: "進む", key: "Alt →", run: goForward, when: () => forward.length > 0 },
     { zh: "复制诊断日志", ja: "診断ログをコピー", run: copyLog },
   ];
 }
@@ -1116,6 +1279,32 @@ async function quickCapture() {
   }
 }
 
+/** Writes AGENTS.md (+ CLAUDE.md / GEMINI.md bridges) so coding agents know how to work in this notebook. */
+async function prepareAgents() {
+  const { value } = await ask({
+    title: L("让 AI agent 能在这里工作", "AI エージェントがここで作業できるようにする"),
+    body: L(
+      "在笔记本根目录写入 AGENTS.md、CLAUDE.md、GEMINI.md：用 jusnote 命令，改完由你审阅。已有的不覆盖。",
+      "ノートブック直下に AGENTS.md・CLAUDE.md・GEMINI.md を置きます：jusnote コマンドを使い、変更はあなたがレビュー。既存のものは上書きしません。",
+    ),
+    choices: [
+      { label: L("取消", "キャンセル"), value: false },
+      { label: L("写入", "書き込む"), value: true, primary: true },
+    ],
+    cancel: false,
+  });
+  if (!value) return;
+  try {
+    const r = await api.agents();
+    const words = { written: L("已写入", "作成"), updated: L("已更新", "更新"), unchanged: L("未变", "変更なし"), kept: L("保留你的", "既存を保持") } as Record<string, string>;
+    toast(r.files.map((f) => `${f.path} ${words[f.action] ?? f.action}`).join("\n"));
+    await refreshFiles();
+    await refreshGit();
+  } catch (e) {
+    toast(msg(e), true);
+  }
+}
+
 async function copyLog() {
   try {
     await navigator.clipboard.writeText(await api.log.get());
@@ -1135,7 +1324,8 @@ function showHelp() {
     ["Ctrl B", "粗体", "太字"],
     ["Ctrl I", "斜体", "斜体"],
     ["Ctrl E", "行内代码", "インラインコード"],
-    ["Ctrl Click", "打开链接", "リンクを開く"],
+    ["Ctrl Click", "打开链接（[[笔记]] 也可以）", "リンクを開く（[[ノート]] も）"],
+    ["Ctrl V", "粘贴图片（存到 attachments/）", "画像を貼り付け（attachments/ に保存）"],
     ["Alt Click", "多个光标", "複数カーソル"],
     ["Ctrl Z", "撤销", "元に戻す"],
     ["Ctrl Shift Z", "重做", "やり直し"],
@@ -1206,8 +1396,9 @@ const STATIC: StaticText[] = [
   ["#pill", "aria-label", "切换笔记本", "ノートブックを切り替え"],
   ["#h-outline", "textContent", "大纲", "アウトライン"],
   ["#h-changes", "textContent", "本篇相对上次提交", "前回のコミットからの変更"],
-  ["#h-uncommitted", "textContent", "未提交", "未コミット"],
-  ["#commit-all", "textContent", "全部提交", "すべてコミット"],
+  ["#h-uncommitted", "textContent", "待审阅", "レビュー待ち"],
+  ["#commit-all", "textContent", "审阅", "レビュー"],
+  ["#h-back", "textContent", "链接到这篇", "このノートへのリンク"],
   ["#h-recent", "textContent", "最近提交", "最近のコミット"],
   ["#t-notebooks", "textContent", "笔记本", "ノートブック"],
   ["#nb-open", "textContent", "打开其它文件夹…", "ほかのフォルダーを開く…"],
@@ -1224,6 +1415,7 @@ const STATIC: StaticText[] = [
   ["#l-guides", "textContent", "彩虹缩进线", "インデントガイド"],
   ["#set-help", "textContent", "快捷键", "ショートカット"],
   ["#set-log", "textContent", "复制诊断日志", "診断ログをコピー"],
+  ["#set-agents", "textContent", "让 AI agent 能在这里工作…", "AI エージェント用の説明を置く…"],
   ["#t-notes", "textContent", "笔记", "ノート"],
   ["#new-note", "textContent", "新建", "新規"],
   ["#t-empty", "textContent", "这个笔记本还是空的。", "このノートブックはまだ空です。"],
@@ -1280,13 +1472,17 @@ function wire() {
   $("btn-settings").addEventListener("click", () => toggleSettings());
   $("btn-files").addEventListener("click", () => toggleFiles());
   $("btn-rail").addEventListener("click", () => toggleRail());
-  $("st-git").addEventListener("click", () => toggleRail(true));
+  $("st-git").addEventListener("click", () => void review.toggleReview());
   $("new-note").addEventListener("click", () => void newNote());
   $("commit-all").addEventListener("click", () => void commitAll());
   $("help-done").addEventListener("click", closeHelp);
   help.addEventListener("mousedown", (e) => e.target === help && closeHelp());
   $("set-help").addEventListener("click", showHelp);
   $("set-log").addEventListener("click", () => void copyLog());
+  $("set-agents").addEventListener("click", () => {
+    closePanels();
+    void prepareAgents();
+  });
 
   for (const [id, key] of [
     ["set-theme", "theme"],
@@ -1356,10 +1552,14 @@ function wire() {
       if (help.classList.contains("open")) closeHelp();
       else if (overlay.classList.contains("open")) closePalette();
       else if (menu.classList.contains("open")) closeMenu();
+      else if (review.isOpen()) review.close();
       else closePanels();
+      if (!rendered && !dialogOpen() && !overlay.classList.contains("open")) editor.focus();
       return;
     }
     if (e.key === "F1") return run(showHelp);
+    if (e.altKey && e.key === "ArrowLeft") return run(goBack);
+    if (e.altKey && e.key === "ArrowRight") return run(goForward);
     if (!mod) return;
     if (key === "s") run(saveAndCommit);
     else if (key === "p" || (e.shiftKey && key === "f")) run(() => openPalette("search"));
@@ -1372,15 +1572,22 @@ function wire() {
     else if (key === "-" || key === "_") run(() => bumpSize(-1));
     else if (key === "0") run(() => setPref("size", SIZE_DEFAULT));
     else if (key === "/") run(showHelp);
+    else if (e.shiftKey && key === "g") run(() => review.toggleReview());
+    else if (e.shiftKey && key === "h" && currentPath) run(() => review.toggleHistory(currentPath));
     else if ((key === "f" || key === "h") && currentPath) run(findInNote);
   });
 
+  window.addEventListener("mouseup", (e) => {
+    if (e.button === 3) void goBack();
+    if (e.button === 4) void goForward();
+  });
   // Outside edits are looked for while the window is in use, and at once
   // when it comes back.
   window.setInterval(() => void watch(), WATCH_MS);
   window.addEventListener("focus", () => {
     void watch();
     void refreshGit();
+    void review.refreshOpen();
   });
   // Leaving the window (or closing it) writes what is unsaved.
   window.addEventListener("blur", () => void autosave());
@@ -1432,14 +1639,64 @@ async function load() {
   else renderOutline();
 }
 
+function insertAtCursor(text: string) {
+  if (rendered) setRendered(false);
+  const at = editor.state.selection.main.head;
+  editor.dispatch({ changes: { from: at, insert: text }, selection: { anchor: at + text.length } });
+  editor.focus();
+}
+
 async function init() {
   wire();
+  review.initReview({
+    current: () => currentPath,
+    open: (path, line) => openFile(path).then(() => void (line && gotoLine(line))),
+    reload: reloadCurrent,
+    refresh: async () => {
+      await refreshFiles();
+      await refreshGit();
+      await renderRecent();
+    },
+    leave: leaveNote,
+    toast,
+    focus: () => {
+      if (!rendered) editor.focus();
+    },
+  });
   onLang(applyLang);
   paintSettings();
   try {
     await load();
   } catch (e) {
     toast(L("启动失败：", "起動できません：") + msg(e), true);
+  }
+  if (new URLSearchParams(location.search).has("selftest")) {
+    await runSelftest({
+      openReview: (path) => review.openReview(path),
+      openHistory: (path) => review.openHistory(path),
+      closeReview: () => review.close(),
+      refresh: async () => {
+        await refreshFiles();
+        await refreshGit();
+      },
+      editor,
+      version: window.jusVersion ?? "",
+      notes: () => docs.map((d) => d.rel),
+      open: async (path) => {
+        await refreshFiles();
+        await openFile(path);
+      },
+      current: () => currentPath,
+      saveState: () => saveState,
+      flush: async () => {
+        window.clearTimeout(autosaveTimer);
+        await autosave();
+        if (saving) await saving;
+      },
+      setRendered,
+      preview,
+      dialogButtons: () => [...document.querySelectorAll<HTMLButtonElement>("#dialog.open .dialog-actions button")],
+    });
   }
 }
 

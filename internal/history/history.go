@@ -25,10 +25,11 @@ import (
 
 // Commit is one entry of the log.
 type Commit struct {
-	Hash    string    `json:"hash"`
-	Message string    `json:"message"`
-	When    time.Time `json:"when"`
-	Author  string    `json:"author"`
+	Hash    string     `json:"hash"`
+	Message string     `json:"message"` // the subject line
+	When    time.Time  `json:"when"`
+	Author  string     `json:"author"`
+	Source  Provenance `json:"source"` // from the Jus-* trailers; empty when there are none
 }
 
 // Repo is an open git repository.
@@ -145,7 +146,11 @@ func (rp *Repo) CommitPaths(message string, paths ...string) (hash string, commi
 			if _, err := wt.Remove(p); err != nil {
 				return "", false, err
 			}
-		} else if _, err := wt.Add(p); err != nil {
+		} else if err := wt.AddWithOptions(&git.AddOptions{Path: p, SkipStatus: true}); err != nil {
+			// SkipStatus: plain Add runs a full status per call, which made
+			// committing n files O(n²) (minutes for 5 000 notes). The status
+			// is already taken above, and only paths it lists (never ignored
+			// ones) get here.
 			return "", false, err
 		}
 		staged++
@@ -202,12 +207,7 @@ func (rp *Repo) Log(limit int) ([]Commit, error) {
 		if limit > 0 && len(out) >= limit {
 			return storer.ErrStop
 		}
-		out = append(out, Commit{
-			Hash:    c.Hash.String(),
-			Message: trimMessage(c.Message),
-			When:    c.Author.When,
-			Author:  c.Author.Name,
-		})
+		out = append(out, toCommit(c))
 		return nil
 	})
 	if err != nil && !errors.Is(err, storer.ErrStop) {
@@ -227,11 +227,4 @@ func (rp *Repo) signature() *object.Signature {
 		return &object.Signature{Name: cfg.User.Name, Email: email, When: time.Now()}
 	}
 	return &object.Signature{Name: "Jusnote", Email: "jusnote@localhost", When: time.Now()}
-}
-
-func trimMessage(s string) string {
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
-	return s
 }

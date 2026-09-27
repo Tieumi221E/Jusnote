@@ -106,3 +106,38 @@ func TestCheckClean(t *testing.T) {
 		t.Fatalf("clean file reported: %+v", out)
 	}
 }
+
+// A section holding only the placeholder gets the entry in its place; the
+// next entry goes after it.
+func TestAppendReplacesPlaceholder(t *testing.T) {
+	tp := daily(t)
+	day := time.Date(2026, 9, 27, 0, 0, 0, 0, time.Local)
+	out, err := tp.Append(nil, day, "工作", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = tp.Append(out, day, "工作", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "- 【工作】\n  - first\n  - second") || strings.Count(s, "- —") != 2 {
+		t.Fatalf("got:\n%s", s)
+	}
+}
+
+// A type whose file pattern names a folder matches notes in that folder.
+func TestMatchPatternWithFolder(t *testing.T) {
+	tp := daily(t)
+	tp.File = "logs/{YYYY-MM}.md"
+	if Match([]*Type{tp}, "logs/2026-09.md") != tp {
+		t.Fatal("logs/2026-09.md should match logs/{YYYY-MM}.md")
+	}
+	if Match([]*Type{tp}, "2026-09.md") != nil || Match([]*Type{tp}, "other/2026-09.md") != nil {
+		t.Fatal("a note outside logs/ should not match")
+	}
+	tp.File = "{YYYY-MM}.md"
+	if Match([]*Type{tp}, "any/folder/2026-09.md") != tp {
+		t.Fatal("a bare pattern matches in any folder")
+	}
+}

@@ -18,7 +18,9 @@
 :root {
   --glass-rgb: 14, 21, 44;
   --glass-bar: rgba(var(--glass-rgb), .86);
-  --glass-panel: rgba(var(--glass-rgb), .97);
+  /* Opaque: panels here sit over bright text, where Jusplay's .97 (made for
+     video) visibly shows the lines behind (seen in the real window). */
+  --glass-panel: rgb(var(--glass-rgb));
   --sheet: rgb(var(--glass-rgb));
   --glass-line: rgba(120, 200, 255, .14);
   --glass-hi: rgba(160, 200, 255, .08);

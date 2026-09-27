@@ -12,23 +12,27 @@ export type DialogSpec<T> = {
   input?: { value?: string; placeholder?: string; select?: [number, number] };
   /** Options for a select line (value and label). */
   options?: { value: string; label: string }[];
+  /** A checkbox under the input; its state comes back as the answer's checked. */
+  check?: { label: string; value: boolean };
   choices: Choice<T>[];
   /** What Esc or a click outside answers. */
   cancel: T;
 };
 
-export type Answer<T> = { value: T; text: string };
+export type Answer<T> = { value: T; text: string; checked: boolean };
 
 const root = document.createElement("div");
 root.id = "dialog";
 root.className = "layer";
-root.innerHTML = '<div class="dialog-card panel" role="dialog" aria-modal="true"><h2></h2><p></p><select></select><input spellcheck="false" autocomplete="off"><div class="dialog-actions"></div></div>';
+root.innerHTML = '<div class="dialog-card panel" role="dialog" aria-modal="true"><h2></h2><p></p><select></select><input spellcheck="false" autocomplete="off"><label class="dialog-check"><input type="checkbox"><span></span></label><div class="dialog-actions"></div></div>';
 document.body.append(root);
 const card = root.querySelector<HTMLDivElement>(".dialog-card")!;
 const titleEl = root.querySelector("h2")!;
 const bodyEl = root.querySelector("p")!;
 const selectEl = root.querySelector("select")!;
-const inputEl = root.querySelector("input")!;
+const inputEl = root.querySelector<HTMLInputElement>("input:not([type=checkbox])")!;
+const checkRow = root.querySelector<HTMLLabelElement>(".dialog-check")!;
+const checkEl = checkRow.querySelector("input")!;
 const actions = root.querySelector<HTMLDivElement>(".dialog-actions")!;
 
 let pending: ((a: Answer<unknown>) => void) | null = null;
@@ -45,7 +49,7 @@ function finish(value: unknown): void {
   pending = null;
   root.classList.remove("open");
   const text = selectEl.hidden ? inputEl.value : selectEl.value;
-  done({ value, text });
+  done({ value, text, checked: checkEl.checked });
 }
 
 export function ask<T>(spec: DialogSpec<T>): Promise<Answer<T>> {
@@ -56,6 +60,9 @@ export function ask<T>(spec: DialogSpec<T>): Promise<Answer<T>> {
   inputEl.hidden = !spec.input;
   inputEl.value = spec.input?.value ?? "";
   inputEl.placeholder = spec.input?.placeholder ?? "";
+  checkRow.hidden = !spec.check;
+  checkEl.checked = spec.check?.value ?? false;
+  checkRow.querySelector("span")!.textContent = spec.check?.label ?? "";
   selectEl.hidden = !spec.options;
   selectEl.replaceChildren(
     ...(spec.options ?? []).map((o) => {

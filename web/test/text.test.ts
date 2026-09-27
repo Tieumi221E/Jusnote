@@ -35,3 +35,30 @@ test("notePath normalises what was typed", () => {
   assert.equal(notePath("/x//y.markdown"), "x/y.markdown");
   assert.equal(notePath(""), "");
 });
+
+import { toggleTask, openWikiLink } from "../src/text.ts";
+
+test("toggleTask flips the n-th task, skipping code", () => {
+  const text = "- [ ] a\n```\n- [ ] code\n```\n* [x] b\n> 1. [ ] quoted\nplain [ ] no";
+  assert.equal(toggleTask(text, 0), text.replace("- [ ] a", "- [x] a"));
+  assert.equal(toggleTask(text, 1), text.replace("* [x] b", "* [ ] b"));
+  assert.equal(toggleTask(text, 2), text.replace("> 1. [ ] quoted", "> 1. [x] quoted"));
+  assert.equal(toggleTask(text, 3), null);
+});
+
+test("openWikiLink finds the link being typed", () => {
+  assert.equal(openWikiLink("see [[ide"), "ide");
+  assert.equal(openWikiLink("see [["), "");
+  assert.equal(openWikiLink("see [[done]] and"), null);
+  assert.equal(openWikiLink("[[a|lab"), null);
+  assert.equal(openWikiLink("no link"), null);
+});
+
+import { changedSpan } from "../src/text.ts";
+
+test("changedSpan finds the differing middle", () => {
+  assert.deepEqual(changedSpan("测试夹具", "测试用的夹具"), [2, 2, 4]);
+  assert.deepEqual(changedSpan("abc", "abc"), [3, 3, 3]);
+  assert.deepEqual(changedSpan("a-b", "aXYb"), [1, 2, 3]);
+  assert.deepEqual(changedSpan("", "new"), [0, 0, 3]);
+});

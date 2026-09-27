@@ -6,6 +6,7 @@
 <title>Jusnote</title>
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="editor.css">
+<link rel="stylesheet" href="katex/katex.min.css">
 <script src="prefs.js"></script>
 </head>
 <body>
@@ -51,6 +52,10 @@
       <ul id="changes"></ul>
     </section>
     <section>
+      <h3 id="h-back"></h3>
+      <ul id="backlinks"></ul>
+    </section>
+    <section>
       <h3><span id="h-uncommitted"></span><span class="grow"></span><button id="commit-all" class="text"></button></h3>
       <ul id="uncommitted"></ul>
     </section>
@@ -77,6 +82,7 @@
   <div class="set-row"><span id="l-guides"></span><button id="set-guides" class="switch" role="switch"></button></div>
   <div class="set-sep"></div>
   <button id="set-help" class="wide"></button>
+  <button id="set-agents" class="wide"></button>
   <button id="set-log" class="wide"></button>
 </div>
 

@@ -297,18 +297,30 @@ func (nb *Notebook) Search(q string, limit int) ([]Hit, error) {
 		if err != nil {
 			continue
 		}
-		for i, line := range strings.Split(string(data), "\n") {
-			at := strings.Index(strings.ToLower(line), lq)
-			if at < 0 {
-				continue
-			}
-			out = append(out, Hit{Rel: d.Rel, Line: i + 1, Text: excerpt(strings.TrimRight(line, "\r"), at)})
-			if limit > 0 && len(out) >= limit {
-				return out, nil
-			}
+		if out = FindIn(out, d.Rel, string(data), lq, limit); limit > 0 && len(out) >= limit {
+			return out, nil
 		}
 	}
 	return out, nil
+}
+
+// FindIn appends to out the lines of text (the note rel) containing lq, a
+// lower-cased query, until out holds limit hits.
+func FindIn(out []Hit, rel, text, lq string, limit int) []Hit {
+	if !strings.Contains(strings.ToLower(text), lq) {
+		return out
+	}
+	for i, line := range strings.Split(text, "\n") {
+		at := strings.Index(strings.ToLower(line), lq)
+		if at < 0 {
+			continue
+		}
+		out = append(out, Hit{Rel: rel, Line: i + 1, Text: excerpt(strings.TrimRight(line, "\r"), at)})
+		if limit > 0 && len(out) >= limit {
+			return out
+		}
+	}
+	return out
 }
 
 // excerpt keeps about 120 characters of line, starting a little before

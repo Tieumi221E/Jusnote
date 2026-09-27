@@ -178,7 +178,7 @@ button.primary { height: 36px; padding: 0 20px; border-radius: var(--r-cap); bac
 button.primary:hover { filter: brightness(1.08); background: var(--grad); }
 button.quiet { height: 36px; padding: 0 16px; border-radius: var(--r-cap); background: var(--field); color: var(--fg); }
 button.quiet:hover { background: var(--field-hover); }
-button.danger { color: var(--err); }
+button.danger, button.wide.danger { color: var(--err); }
 button.wide { display: block; width: 100%; height: 34px; padding: 0 12px; border-radius: var(--r-sm); color: var(--fg); font-size: var(--fs-2); text-align: left; }
 button.wide:hover { background: var(--field-hover); }
 
@@ -348,3 +348,78 @@ button.wide:hover { background: var(--field-hover); }
   #file-name::before { display: none; }
   #st-path { display: none; }
 }
+
+/* --- 0.2.0: links, math, review ----------------------------------------- */
+
+/* Wiki links in the editor: the text reads as a link; a missing target is
+   dashed, so a typo shows at once. */
+.cm-wikilink { color: var(--accent); }
+.cm-wikilink-missing { color: var(--muted); text-decoration: underline dashed color-mix(in srgb, var(--warn) 70%, transparent); text-underline-offset: 3px; }
+.cm-tooltip-autocomplete { padding: 4px; }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul { font-family: var(--font); font-size: var(--fs-2); max-height: 280px; }
+.cm-tooltip-autocomplete > ul > li { padding: 5px 10px !important; border-radius: var(--r-sm); }
+.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--field-hover) !important; color: var(--fg) !important; }
+.cm-completionDetail { margin-left: 12px; color: var(--faint); font-style: normal; }
+
+#preview a.wikilink { color: var(--accent); border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+#preview a.wikilink:hover { text-decoration: none; border-bottom-color: var(--accent); }
+#preview .math-block { margin: 0 0 1em; overflow-x: auto; overflow-y: hidden; }
+#preview .katex { font-size: 1.08em; }
+#preview li:has(> input[type=checkbox]) input { cursor: pointer; }
+
+/* Backlinks in the rail. */
+#rail li.back { display: flex; flex-direction: column; gap: 2px; white-space: normal; }
+#rail li.back .from { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rail li.back .sub { color: var(--faint); font-size: var(--fs-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Dialog checkbox. */
+.dialog-check { display: flex; align-items: center; gap: 8px; margin: 10px 2px 0; color: var(--muted); cursor: pointer; }
+.dialog-check input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+
+/* The history drawer (review / history): from the right, over the editor. */
+#review { position: fixed; top: 72px; right: 16px; bottom: 60px; width: min(720px, calc(100vw - 32px)); z-index: 28;
+  display: flex; flex-direction: column; transform: translateX(calc(24px * var(--move))); }
+#review.open { transform: none; }
+#review header { display: flex; align-items: center; gap: 8px; padding: 14px 16px 8px 20px; }
+#review h2 { margin: 0; font-size: var(--fs-3); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-list { list-style: none; margin: 0; padding: 0 8px 8px; overflow: auto; flex: 0 1 auto; max-height: 34%; border-bottom: 1px solid var(--line); }
+.rv-list li { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 4px 10px; border-radius: var(--r-sm); color: var(--muted); }
+.rv-list li.click { cursor: pointer; }
+.rv-list li.click:hover { background: var(--field); color: var(--fg); }
+.rv-list li.sel { background: var(--field-hover); color: var(--fg); }
+.rv-list li.empty { color: var(--faint); }
+.rv-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-list .tag { flex: none; color: var(--faint); font-size: var(--fs-1); font-variant-numeric: tabular-nums; }
+.rv-list .tag.new { color: var(--ok); }
+.rv-list .tag.modified { color: var(--accent); }
+.rv-list .tag.deleted { color: var(--err); }
+.badge { flex: none; padding: 1px 8px; border-radius: var(--r-cap); background: color-mix(in srgb, var(--accent-2) 16%, transparent);
+  color: var(--accent-2); font-size: var(--fs-1); white-space: nowrap; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.rv-diff { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 12px 12px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; }
+.rv-diff .empty { padding: 16px 8px; color: var(--faint); font-family: var(--font); font-size: var(--fs-2); }
+.rv-caption { padding: 4px 8px 8px; color: var(--faint); font-family: var(--font); font-size: var(--fs-1); }
+.hunk { margin: 0 0 12px; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.hunk-head { padding: 4px 12px; background: var(--field); color: var(--faint); font-family: var(--font); font-size: var(--fs-1); }
+.dl { display: grid; grid-template-columns: 4ch 4ch 2ch 1fr; }
+.dl .op { color: var(--faint); text-align: center; user-select: none; }
+.dl.add .op { color: var(--ok); }
+.dl.del .op { color: var(--err); }
+.rv-note { margin: 4px 8px 12px; padding: 8px 12px; border-radius: var(--r-md); background: var(--field); color: var(--muted); font-family: var(--font); font-size: var(--fs-2); }
+.dl .ln { padding: 0 6px; color: var(--faint); text-align: right; user-select: none; font-variant-numeric: tabular-nums; }
+.dl .tx { padding: 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--editor-font); }
+.dl.add { background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.dl.del { background: color-mix(in srgb, var(--err) 12%, transparent); }
+.dl.del .tx { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--err) 45%, transparent); }
+.rv-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.rv-actions:empty { display: none; }
+button:disabled { opacity: .45; cursor: default; filter: none; }
+/* A long note's preview lays out only what is on screen (the selftest's
+   1 MB note: most of the render time was layout of blocks never seen). */
+#preview .md > * { content-visibility: auto; contain-intrinsic-size: auto 1.8em; }
+/* A note someone else changed and you have not reviewed: an accent dot, the
+   agent's colour when an agent said it was them. */
+#files li.review::after { content: ""; flex: none; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--warn); }
+#files li.review.agent::after { background: var(--accent-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-2) 22%, transparent); }
+.dl .tx mark { background: none; color: inherit; border-radius: var(--r-xs); padding: 0 1px; }
+.dl.add .tx mark { background: color-mix(in srgb, var(--ok) 38%, transparent); }
+.dl.del .tx mark { background: color-mix(in srgb, var(--err) 34%, transparent); }

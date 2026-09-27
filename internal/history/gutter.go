@@ -36,7 +36,7 @@ func (rp *Repo) Gutter(rel string) ([]Change, error) {
 	if err != nil {
 		return nil, err
 	}
-	return diffChanges(head, string(work)), nil
+	return diffChanges(normalizeEOL(head), normalizeEOL(string(work))), nil
 }
 
 // headContent is the file's text at HEAD; ok is false when there is no

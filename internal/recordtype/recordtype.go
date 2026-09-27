@@ -9,6 +9,7 @@ package recordtype
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -164,12 +165,21 @@ func (t *Type) Section(name string) *Section {
 
 // Match returns the first type whose file pattern matches rel's base name.
 func Match(types []*Type, rel string) *Type {
-	base := filepath.Base(filepath.FromSlash(rel))
+	rel = filepath.ToSlash(rel)
+	base := path.Base(rel)
 	for _, t := range types {
 		if t.File == "" {
 			continue
 		}
-		if patternRegex(t.File).MatchString(base) {
+		// A pattern with a folder ("logs/{YYYY-MM}.md") is matched against the
+		// whole path; a bare one ("{YYYY-MM}.md") against the file name, in
+		// any folder. (0.1.0 compared only the file name, so a pattern with a
+		// folder never matched and those logs were never checked.)
+		target := base
+		if strings.Contains(t.File, "/") {
+			target = rel
+		}
+		if patternRegex(t.File).MatchString(target) {
 			return t
 		}
 	}
@@ -294,6 +304,18 @@ func (t *Type) Append(data []byte, date time.Time, section, text string) ([]byte
 			se = i
 			break
 		}
+	}
+	// A section that holds only the skeleton's placeholder ("- —") gets the
+	// entry in its place, not after it.
+	var items []int
+	for i := si + 1; i < se; i++ {
+		if trim(lines[i]) != "" {
+			items = append(items, i)
+		}
+	}
+	if len(items) == 1 && trim(lines[items[0]]) == "- —" {
+		lines[items[0]] = "  - " + text
+		return []byte(joinLines(lines)), nil
 	}
 	at := lastNonBlankEnd(lines, si+1, se)
 	lines = insertAt(lines, at, []string{"  - " + text})

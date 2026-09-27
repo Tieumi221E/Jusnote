@@ -3,7 +3,13 @@
 // the page is served under a per-run token path.
 
 export type Doc = { rel: string; size: number; modTime: string };
-export type Commit = { hash: string; message: string; when: string; author: string };
+export type Source = { author?: string; model?: string; run?: string };
+export type Commit = { hash: string; message: string; when: string; author: string; source: Source };
+export type Change = { path: string; kind: "new" | "modified" | "deleted"; source: Source; tracked: boolean; mine: boolean };
+export type Hunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: { op: " " | "-" | "+"; text: string }[] };
+export type FileDiff = { hunks: Hunk[]; eolOnly: boolean };
+export type Link = { line: number; kind: "wiki" | "md"; raw: string; target: string };
+export type Backlink = { from: string; line: number; text: string };
 export type GitChange = { line: number; kind: "add" | "modify" | "delete" };
 export type Diagnostic = { line: number; message: string; severity: string };
 export type Hit = { rel: string; line: number; text: string };
@@ -61,7 +67,8 @@ export const api = {
   /** all: every change in the tree; mine: only what the app itself wrote to paths. */
   commit: (paths: string[], opt: { all?: boolean; mine?: boolean } = {}) =>
     j<{ committed: boolean; hash: string }>("api/commit", send("POST", { paths, ...opt })),
-  rename: (from: string, to: string) => j<{ path: string }>("api/rename", send("POST", { from, to })),
+  rename: (from: string, to: string, links = true) =>
+    j<{ path: string; updated: string[]; committed: boolean }>("api/rename", send("POST", { from, to, links })),
   remove: (path: string) => j<{ committed: boolean }>("api/delete", send("POST", { path })),
   search: (text: string) => j<Hit[]>("api/search?q=" + q(text)),
   gutter: (path: string) => j<GitChange[]>("api/gutter?path=" + q(path)),
@@ -70,6 +77,18 @@ export const api = {
   capture: (type: string, section: string, text: string, date?: string) =>
     j<Saved>("api/capture", send("POST", { type, section, text, date })),
   status: () => j<string[]>("api/status"),
+  changes: () => j<Change[]>("api/changes"),
+  /** Against HEAD; with hash, that commit's version against the file now. */
+  diff: (path: string, hash = "") => j<FileDiff>("api/diff?path=" + q(path) + (hash ? "&hash=" + q(hash) : "")),
+  discard: (path: string) => j<unknown>("api/discard", send("POST", { path })),
+  fileLog: (path: string, limit = 50) => j<Commit[]>("api/history?limit=" + limit + "&path=" + q(path)),
+  show: (hash: string, path: string) => j<{ text: string }>("api/show?hash=" + q(hash) + "&path=" + q(path)),
+  restore: (hash: string, path: string) => j<{ path: string; version: string; committed: boolean; hash: string }>("api/restore", send("POST", { hash, path })),
+  links: (path: string, text?: string) => j<{ out: Link[]; back: Backlink[] }>("api/links", send("POST", { path, text })),
+  resolve: (target: string, from: string) => j<{ path: string }>("api/resolve?target=" + q(target) + "&from=" + q(from)),
+  attach: (note: string, name: string, data: string) => j<{ path: string; link: string }>("api/attach", send("POST", { note, name, data })),
+  agents: (force = false) => j<{ files: { path: string; action: string }[]; committed: boolean }>("api/agents", send("POST", { force })),
+  selftest: (report: unknown) => j<unknown>("api/selftest", send("POST", report)),
   history: (limit = 20) => j<Commit[]>("api/history?limit=" + limit),
   session: {
     get: () => j<Session>("api/session"),
