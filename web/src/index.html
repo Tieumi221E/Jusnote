@@ -15,7 +15,7 @@
     <div id="editor"></div>
     <div id="preview" hidden></div>
 
-    <button id="pill" class="pill">
+    <button id="pill" data-cap="notebook.recent notebook.open" class="pill">
       <img class="mark day" src="icon-64.png" alt="">
       <img class="mark night" src="icon-64-dark.png" alt="">
       <span id="nb-name"></span>
@@ -24,18 +24,18 @@
     </button>
 
     <div id="toolbar" class="pill">
-      <button id="btn-files"></button>
-      <button id="btn-search"></button>
-      <button id="btn-rail"></button>
-      <button id="btn-render"></button>
-      <button id="btn-palette"></button>
-      <button id="btn-settings"></button>
+      <button id="btn-files" data-cap="list"></button>
+      <button id="btn-search" data-cap="search"></button>
+      <button id="btn-rail" data-cap="log"></button>
+      <button id="btn-render" data-cap="ui"></button>
+      <button id="btn-palette" data-cap="ui"></button>
+      <button id="btn-settings" data-cap="ui"></button>
     </div>
 
     <div id="statusbar" class="bar">
       <span id="st-path"></span>
       <span class="grow"></span>
-      <button id="st-git" class="st"></button>
+      <button id="st-git" data-cap="status" class="st"></button>
       <span id="st-words"></span>
       <span id="st-pos"></span>
       <span id="st-save"></span>
@@ -56,7 +56,7 @@
       <ul id="backlinks"></ul>
     </section>
     <section>
-      <h3><span id="h-uncommitted"></span><span class="grow"></span><button id="commit-all" class="text"></button></h3>
+      <h3><span id="h-uncommitted"></span><span class="grow"></span><button id="commit-all" data-cap="status diff commit discard" class="text"></button></h3>
       <ul id="uncommitted"></ul>
     </section>
     <section>
@@ -69,28 +69,28 @@
 <div id="nb-popover" class="panel layer">
   <div class="pop-title" id="t-notebooks"></div>
   <ul id="nb-recent"></ul>
-  <button id="nb-open" class="wide"></button>
+  <button id="nb-open" data-cap="notebook.open" class="wide"></button>
 </div>
 
 <div id="settings" class="panel layer">
-  <div class="set-row"><span id="l-theme"></span><div class="seg" id="set-theme"><button data-v="light"></button><button data-v="dark"></button></div></div>
-  <div class="set-row"><span id="l-lang"></span><div class="seg" id="set-lang"><button data-v="zh">中文</button><button data-v="ja">日本語</button></div></div>
-  <div class="set-row"><span id="l-font"></span><div class="seg" id="set-font"><button data-v="sans"></button><button data-v="mono"></button></div></div>
-  <div class="set-row"><span id="l-size"></span><div class="stepper"><button id="size-dec">−</button><span id="size-val"></span><button id="size-inc">＋</button></div></div>
-  <div class="set-row"><span id="l-wrap"></span><button id="set-wrap" class="switch" role="switch"></button></div>
-  <div class="set-row"><span id="l-numbers"></span><button id="set-numbers" class="switch" role="switch"></button></div>
-  <div class="set-row"><span id="l-guides"></span><button id="set-guides" class="switch" role="switch"></button></div>
+  <div class="set-row"><span id="l-theme"></span><div class="seg" id="set-theme"><button data-v="light" data-cap="prefs.set"></button><button data-v="dark" data-cap="prefs.set"></button></div></div>
+  <div class="set-row"><span id="l-lang"></span><div class="seg" id="set-lang"><button data-v="zh" data-cap="prefs.set">中文</button><button data-v="ja" data-cap="prefs.set">日本語</button></div></div>
+  <div class="set-row"><span id="l-font"></span><div class="seg" id="set-font"><button data-v="sans" data-cap="prefs.set"></button><button data-v="mono" data-cap="prefs.set"></button></div></div>
+  <div class="set-row"><span id="l-size"></span><div class="stepper"><button id="size-dec" data-cap="prefs.set">−</button><span id="size-val"></span><button id="size-inc" data-cap="prefs.set">＋</button></div></div>
+  <div class="set-row"><span id="l-wrap"></span><button id="set-wrap" data-cap="prefs.set" class="switch" role="switch"></button></div>
+  <div class="set-row"><span id="l-numbers"></span><button id="set-numbers" data-cap="prefs.set" class="switch" role="switch"></button></div>
+  <div class="set-row"><span id="l-guides"></span><button id="set-guides" data-cap="prefs.set" class="switch" role="switch"></button></div>
   <div class="set-sep"></div>
-  <button id="set-help" class="wide"></button>
-  <button id="set-agents" class="wide"></button>
-  <button id="set-log" class="wide"></button>
+  <button id="set-help" data-cap="ui" class="wide"></button>
+  <button id="set-agents" data-cap="agents" class="wide"></button>
+  <button id="set-log" data-cap="ui" class="wide"></button>
 </div>
 
 <div id="files-panel" class="panel layer">
   <header>
     <span id="t-notes"></span>
     <span class="grow"></span>
-    <button id="new-note" class="text"></button>
+    <button id="new-note" data-cap="write" class="text"></button>
   </header>
   <ul id="files" role="tree"></ul>
 </div>
@@ -100,13 +100,13 @@
 <div id="empty" class="layer">
   <div class="empty-card">
     <p id="t-empty"></p>
-    <button id="empty-new" class="primary"></button>
+    <button id="empty-new" data-cap="write" class="primary"></button>
   </div>
 </div>
 
 <div id="overlay" class="layer">
   <div id="palette" class="panel">
-    <input id="palette-input" autocomplete="off" spellcheck="false">
+    <input id="palette-input" data-cap="ui" autocomplete="off" spellcheck="false">
     <ul id="palette-list" role="listbox"></ul>
   </div>
 </div>
@@ -115,7 +115,7 @@
   <div class="help-card panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
     <h2 id="help-title"></h2>
     <dl id="help-keys"></dl>
-    <div class="help-foot"><span id="help-version"></span><span class="grow"></span><button id="help-done" class="primary"></button></div>
+    <div class="help-foot"><span id="help-version"></span><span class="grow"></span><button id="help-done" data-cap="ui" class="primary"></button></div>
   </div>
 </div>
 
@@ -125,7 +125,7 @@
     <img class="welcome-mark night" src="icon-64-dark.png" alt="">
     <h1>Jusnote</h1>
     <p id="t-welcome"></p>
-    <button id="pick-folder" class="primary"></button>
+    <button id="pick-folder" data-cap="notebook.open" class="primary"></button>
     <ul id="welcome-recent"></ul>
   </div>
 </div>

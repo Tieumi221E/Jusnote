@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Tieumi221E/Jus/capreg"
+	"github.com/Tieumi221E/Jus/instance"
 	"github.com/Tieumi221E/Jusnote/internal/jusbase/appdir"
 	"github.com/Tieumi221E/Jusnote/internal/jusbase/shell"
 	"github.com/Tieumi221E/Jusnote/internal/server"
@@ -31,18 +33,21 @@ func cmdGUI(args []string) error {
 	selftest := fs.Bool("selftest", false, "run the page selftest, print the report, exit")
 	dataDir := fs.String("data", "", "the app's settings folder (default: next to the exe)")
 	if err := fs.Parse(args); err != nil {
-		return usageError{"gui: " + err.Error()}
+		return capreg.Usagef("gui: %v", err)
 	}
 	if fs.NArg() > 0 {
-		return usageError{"gui: unexpected argument " + fs.Arg(0)}
+		return capreg.Usagef("gui: unexpected argument %s", fs.Arg(0))
 	}
 	if *selftest && *dir == "" {
-		return usageError{"gui -selftest needs -notebook (a copy: the selftest edits it)"}
+		return capreg.Usagef("gui -selftest needs -notebook (a copy: the selftest edits it)")
 	}
 	if !ui.Built() {
 		return fmt.Errorf("the editor page is not built: run `npm --prefix web run build` first")
 	}
 	data := *dataDir
+	if data == "" {
+		data = os.Getenv("JUSNOTE_DATA") // as for the command line (dataDir)
+	}
 	if data == "" {
 		d, _, err := appdir.Dir("jusnote")
 		if err != nil {
@@ -52,6 +57,7 @@ func cmdGUI(args []string) error {
 	}
 	srv := server.New(ui.FS(), data)
 	srv.Version = version
+	srv.Caps = windowRegistry(srv, data)
 	if err := srv.OpenDefault(*dir); err != nil {
 		return err
 	}
@@ -69,6 +75,8 @@ func cmdGUI(args []string) error {
 		return err
 	}
 	defer srv.Close()
+	// The command line finds this window here and hands it its commands.
+	defer instance.Announce(data, "jusnote", version, base)()
 	url := base
 	if *selftest {
 		url += "?selftest=1"

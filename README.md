@@ -10,11 +10,14 @@ A local Markdown notebook for Windows: plain text, history in git, friendly to A
 - **审阅别人的改动**：别的程序或 AI agent 改了笔记，Jusnote 不会替你提交，而是列在“审阅”里：逐个文件看差异，接受或丢弃。agent 声明了身份的，历史里会记下是哪个 agent、哪个模型、哪次运行写的。你正在改的笔记被别处改了，会问你用哪一份，谁也不会被悄悄覆盖。
 - **笔记之间的链接**：`[[笔记名]]` 输入时自动补全，Ctrl+单击跳转，右栏列出“链接到这篇”的笔记；重命名时一并更新指向它的链接。
 - **编辑器的手感**：Markdown 高亮（标记淡化、正文优先），标题折叠，查找替换，多光标，命令面板，文件名与全文搜索，预览（公式、可勾选的任务），粘贴图片，字号与字体可调，自动换行，行号，彩虹缩进线。
+- **不止 Markdown**：笔记本里的其他文本文件（配置、脚本、日志）也列出来，按纯文本打开编辑；不是 UTF-8 的（GBK、Shift-JIS 等）或超过 4 MB 的只读显示。针对某种文件的功能不做，交给终端和命令行：文件夹右键“在终端中打开”。
+- **笔记本自带的技能**：`.jusnote/skills/` 里放一段脚本和它的说明，命令面板“运行技能…”就能跑，结果放在 `.jusnote/out/`；第一次运行和脚本改过之后都会先给你看要执行的命令。
+- **和其他 Jus 应用连在一起**：笔记里的 `jus://play/…` 链接在 Jusplay 里打开到那一刻，预览里显示是哪一集、看到哪里；没装的应用，链接显示“未安装”，不报错。
 - **记录类型**：内置“日志”“阅读笔记”两种结构，规则是笔记本里的纯文本文件（`.jusnote/types/`）；写的时候当场检查格式，也可以一句话记到今天的某一栏。
 - **中文 / 日本語** 界面，日间 / 夜间两种外观。
 - **隐私**：完全离线，不联网、不上传任何东西。笔记本自己的记录放在它隐藏的 `.jusnote` 文件夹里；程序的设置放在 exe 旁边；日志只在内存里。
 
-版本：**0.2.0**（审阅与历史、笔记链接、给 AI agent 的完整命令行）。
+版本：**0.3.0**（其他文本文件、打开到某一行、提交方式、笔记本自带的技能、和其他 Jus 应用连在一起）。
 
 ## 下载与运行
 
@@ -36,6 +39,7 @@ exe 没有代码签名，第一次运行时 Windows SmartScreen 可能提示“�
 | `Ctrl+S` | 存盘并提交这篇笔记 |
 | 切换笔记、切换笔记本、关闭窗口 | 提交 Jusnote 写过、之后没被别处改过的笔记 |
 | 重命名、删除、恢复旧版 | 立即提交（重命名连同被更新了链接的笔记一起） |
+| 本笔记本设为手动提交（命令面板“自动提交：开 / 关”，或 `jusnote config set -commit manual`） | 切换与关闭时不再提交，只在 `Ctrl+S` 与明确的提交时提交；适合本身就是代码仓库的文件夹 |
 | 别的程序或 agent 改了文件 | 不自动提交；状态栏显示“N 处待审阅”，文件列表里标出改过的笔记（agent 改的是紫色），在“审阅”（`Ctrl+Shift+G`）里看差异，接受或丢弃 |
 
 - **历史**（`Ctrl+Shift+H`）：这篇笔记的每一次提交，选一版就能看到它和现在的差别，“恢复这一版”会作为一次新提交记下，历史不会被改写。
@@ -65,7 +69,8 @@ Codex、Claude Code、Cursor、Gemini CLI 等编码 agent 可以直接在笔记�
 
 ```text
 jusnote                              打开编辑器（默认打开上次的笔记本）
-jusnote list | read <路径> | search <文字> | links <路径> | types | info
+jusnote open <文件>[:行] | open <文件夹> | open jus://note/…   在编辑器里打开（没开就启动，文件在别的笔记本就切过去）
+jusnote list [-all] | read <路径> | search <文字> | links <路径> | types | info
 jusnote write <路径> -text "…" | -file <文件>   原子写入并提交（-no-commit 只写不提交；-base 版本冲突检查）
 jusnote append <路径> -file <文件>     在末尾追加（其余不动）
 jusnote attach <笔记> <文件>          把图片等文件放到笔记旁的 attachments/，输出要插入的 Markdown
@@ -74,9 +79,29 @@ jusnote capture -section 工作 -text "…"   记到今天的日志（-type、-d
 jusnote check <路径>                   按记录类型检查格式
 jusnote rename <旧> <新> | delete <路径>   重命名（同时更新链接）/ 删除
 jusnote status | diff <路径> | discard <路径> | commit <路径…> [-all]
-jusnote log [路径] | show <提交> <路径> | restore <提交> <路径>
-jusnote agents | init | help [-json] | version
+jusnote log [路径] [-session <id>] | show <提交> <路径> | restore <提交> <路径>
+jusnote revert -session <id> [-yes]   撤回一次 agent 会话的全部改动（不加 -yes 只列出计划）
+jusnote config get | config set -commit auto|manual
+jusnote skills list | skills run <名> [-yes]
+jusnote link <路径> [-line N] | link preview <jus://…>
+jusnote editor open <路径> [-line N] | editor status | events watch   （窗口里：打开、此刻在看什么、事件流）
+jusnote notebook open <文件夹> | notebook recent | prefs get | prefs set <键> <值>
+jusnote agents | init | manifest | help [-json] | version
 ```
+
+编辑器能做的，命令行都能做：界面里每个按钮、每条命令面板命令都标着它用的是哪个命令，自检会核对。窗口开着时，窗口里的命令交给它执行，命令行写入的改动当场显示在编辑器里。
+
+## 笔记本里的技能
+
+在笔记本里建 `.jusnote/skills/<名>/`：
+
+```text
+SKILL.md     给人和 agent 看的说明（开头的 name、description）
+skill.json   {"run": ["python", "{skill}/make.py", "{out}"], "timeout": 600}
+make.py      脚本本身
+```
+
+`{skill}` 是技能文件夹，`{out}` 是它的输出文件夹 `.jusnote/out/<名>/`（不进 git），`{notebook}` 是笔记本。脚本在笔记本根目录运行，环境变量 `JUS_ROOT`、`JUS_OUT`、`JUS_SKILL` 告诉它位置；它通过 `jusnote` 命令写的东西记在 `skill/<名>` 名下。打印的内容存在 `last.log`。技能是随笔记本来的代码：第一次运行、以及它的任何文件改过之后，都会先显示命令、等你确认；确认记在程序自己的文件夹里，笔记本不能给自己放行。只有 `SKILL.md` 没有 `skill.json` 的，是给 agent 的说明。
 
 ## 快捷键
 
@@ -101,7 +126,7 @@ jusnote agents | init | help [-json] | version
 | F1 | 全部快捷键 |
 | Esc | 关闭面板 |
 
-预览里：点任务框就勾选（写回原文）；`$…$`、`$$…$$` 显示为公式。文件列表里右键一篇笔记可以重命名、删除、复制 `jus://` 链接或在资源管理器中显示。
+预览里：点任务框就勾选（写回原文）；`$…$`、`$$…$$` 显示为公式；`jus://` 链接悬停显示它指向什么。文件列表里右键一篇笔记可以重命名、删除、复制 `jus://` 链接或在资源管理器中显示；右键文件夹可以在这里新建笔记或在终端中打开。
 
 ## 数据放在哪里
 
@@ -111,12 +136,14 @@ jusnote agents | init | help [-json] | version
 | 粘贴的图片与文件 | 笔记旁边的 `attachments\` |
 | 历史 | 笔记本自己的 git 仓库（`.git`） |
 | 记录类型的规则 | 笔记本里隐藏的 `.jusnote\types\`（随 git 同步，可以编辑、分享） |
+| 技能；本笔记本的设置（提交方式） | `.jusnote\skills\`、`.jusnote\settings.json`（随 git 同步） |
+| 技能的输出 | `.jusnote\out\<名>\`（不进 git） |
 | 上一版备份；上次打开的笔记、光标位置、agent 声明的来源 | `.jusnote\backup\`、`.jusnote\cache\`（不进 git） |
 | 给 agent 的说明（只在你要求时写入） | 笔记本根目录的 `AGENTS.md`、`CLAUDE.md`、`GEMINI.md` |
-| 最近的笔记本、界面偏好 | exe 旁边的 `jusnote-data\`（不可写时用 `%AppData%\jusnote`） |
+| 最近的笔记本、界面偏好、用过的笔记本列表、确认过的技能 | exe 旁边的 `jusnote-data\`（不可写时用 `%AppData%\jusnote`） |
 | 日志 | 只在内存里；需要时在“设置 → 复制诊断日志” |
 
-删除 `jusnote-data` 和笔记本里的 `.jusnote` 就会清除 Jusnote 留下的痕迹；笔记和 git 历史是你的，Jusnote 不会删除。
+`jusnote manifest` 列出 Jusnote 在这台电脑上写过的每一处。卸载用 Jus 的 `jus uninstall jusnote`：先列出要删的（程序、`jusnote-data`、各笔记本的 `.jusnote\cache` 与 `.jusnote\out`），加 `-yes` 才删；笔记、git 历史、记录类型、技能、备份是你的，只列出、不删。
 
 ## 从源码构建
 

@@ -23,6 +23,7 @@ export type Answer<T> = { value: T; text: string; checked: boolean };
 
 const root = document.createElement("div");
 root.id = "dialog";
+root.dataset.cap = "ui"; // it asks; what the answer does is the caller's capability
 root.className = "layer";
 root.innerHTML = '<div class="dialog-card panel" role="dialog" aria-modal="true"><h2></h2><p></p><select></select><input spellcheck="false" autocomplete="off"><label class="dialog-check"><input type="checkbox"><span></span></label><div class="dialog-actions"></div></div>';
 document.body.append(root);

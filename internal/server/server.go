@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Tieumi221E/Jus/capreg"
+	"github.com/Tieumi221E/Jusnote/internal/footprint"
 	"github.com/Tieumi221E/Jusnote/internal/history"
 	"github.com/Tieumi221E/Jusnote/internal/jusbase/memlog"
 	"github.com/Tieumi221E/Jusnote/internal/notebook"
@@ -31,6 +33,7 @@ import (
 // another program or an agent stays in the working tree for the user to
 // review (the "uncommitted" list: diff, accept, discard).
 type Server struct {
+	data   string // the app's own folder
 	fsys   fs.FS
 	prefs  *prefStore
 	recent *recentStore
@@ -44,6 +47,11 @@ type Server struct {
 	OnSelftest func([]byte)
 	mem        *memlog.Buffer
 
+	// Caps is everything the app can do (internal/caps and RegisterWindow),
+	// served at api/cap for the page and the command line.
+	Caps *capreg.Registry
+	live live // what the page shows, and who listens (live.go)
+
 	mu      sync.RWMutex
 	svc     *service.Service
 	pending map[string]string // written by the app since their last commit: path -> version written
@@ -54,6 +62,7 @@ func New(fsys fs.FS, dataDir string) *Server {
 	mem := memlog.New(4000)
 	return &Server{
 		fsys:    fsys,
+		data:    dataDir,
 		prefs:   openPrefs(filepath.Join(dataDir, "ui.json")),
 		recent:  openRecent(filepath.Join(dataDir, "notebooks.json")),
 		mem:     mem,
@@ -80,6 +89,7 @@ func (s *Server) Open(root string) error {
 	s.pending = map[string]string{}
 	s.mu.Unlock()
 	s.recent.add(svc.NB.Root())
+	footprint.Remember(s.data, svc.NB.Root())
 	s.Log.Printf("open notebook %s", svc.NB.Root())
 	return nil
 }
@@ -109,7 +119,7 @@ func (s *Server) current() *service.Service {
 }
 
 // Notebook is the open notebook's service (nil before one is open), for
-// the selftest and the benchmarks.
+// the selftest, the benchmarks and the window's capabilities.
 func (s *Server) Notebook() *service.Service { return s.current() }
 
 // commit commits the given paths — the user named them, so whoever wrote
@@ -137,8 +147,8 @@ func (s *Server) commit(subject string, paths ...string) (string, bool, error) {
 // review.
 func (s *Server) commitMine(only ...string) (string, bool, error) {
 	svc := s.current()
-	if svc == nil {
-		return "", false, nil
+	if svc == nil || svc.NB.Settings().Commit == "manual" {
+		return "", false, nil // manual: only Ctrl+S and an explicit commit commit
 	}
 	s.mu.Lock()
 	var paths []string

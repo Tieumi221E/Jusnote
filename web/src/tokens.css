@@ -13,8 +13,7 @@
 }
 :root[data-font=mono] { --editor-font: var(--font-mono); }
 
-/* Materials and shapes (docs/design-language.md §六, §七). The theme is the
-   material: day is ice glass, night is navy glass, everywhere. */
+/* Materials and shapes. The theme is the material: day is ice glass, night is navy glass, everywhere. */
 :root {
   --glass-rgb: 14, 21, 44;
   --glass-bar: rgba(var(--glass-rgb), .86);

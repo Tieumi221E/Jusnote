@@ -3,6 +3,8 @@
 package shell
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"syscall"
 	"unsafe"
@@ -120,6 +122,22 @@ func pickFolder(owner uintptr, title string) string {
 func reveal(path string) error {
 	cmd := exec.Command("explorer.exe")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `explorer.exe /select,"` + path + `"`}
+	return cmd.Start()
+}
+
+// terminal opens a terminal in dir: Windows Terminal when it is here,
+// else a console with cmd.exe. The editor has no terminal of its own; the
+// system's is one click away.
+func terminal(dir string) error {
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("no folder %s", dir)
+	}
+	if wt, err := exec.LookPath("wt.exe"); err == nil {
+		return exec.Command(wt, "-d", dir).Start()
+	}
+	cmd := exec.Command("cmd.exe")
+	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000010} // CREATE_NEW_CONSOLE
 	return cmd.Start()
 }
 

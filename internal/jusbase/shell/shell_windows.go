@@ -123,7 +123,22 @@ func (win *Window) bindGeneric() error {
 		"kpPickFolder": func(title string) string {
 			return pickFolder(win.hwnd, title)
 		},
-		"kpReveal": func(path string) error { return reveal(path) },
+		"kpReveal":   func(path string) error { return reveal(path) },
+		"kpTerminal": func(dir string) error { return terminal(dir) },
+		// A link of another Jus app (jus://play/…): to that app ("notinstalled" when it is not here).
+		"kpOpenJus": func(link string) (string, error) {
+			if err := OpenJusLink(link); errors.Is(err, ErrNotInstalled) {
+				return "notinstalled", nil
+			} else if err != nil {
+				return "", err
+			}
+			return "opened", nil
+		},
+		// To the front: a command from the command line (editor open) wants the window seen.
+		"kpFront": func() error {
+			win.w.Dispatch(win.front)
+			return nil
+		},
 		"kpOpenExternal": func(u string) error {
 			if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "mailto:") {
 				return errors.New("refusing to open a non-web URL")

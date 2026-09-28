@@ -387,7 +387,21 @@ const phraseCompartment = new Compartment();
 
 const numbers = (on: boolean): Extension => (on ? [lineNumbers(), highlightActiveLineGutter()] : []);
 
+/**
+ * What kind of file the editor shows: a Markdown note has all of it
+ * (highlighting, links, completion, record-type checks); another text file
+ * is plain text with the general editing (numbers, search, multiple
+ * cursors, git marks, history); a read-only one cannot be changed.
+ */
+export interface DocMode {
+  note: boolean;
+  readOnly: boolean;
+}
+
+let mode: DocMode = { note: true, readOnly: false };
+
 function extensions(onUpdate: (u: ViewUpdate) => void): Extension[] {
+  const note = mode.note;
   return [
     numberCompartment.of(numbers(prefs.numbers)),
     gitGutter,
@@ -413,13 +427,15 @@ function extensions(onUpdate: (u: ViewUpdate) => void): Extension[] {
     highlightActiveLine(),
     highlightSelectionMatches(),
     search({ top: true }),
-    autocompletion({ override: [wikiCompletion], icons: false, activateOnTyping: true }),
+    note ? autocompletion({ override: [wikiCompletion], icons: false, activateOnTyping: true }) : [],
     keymap.of([
-      ...completionKeymap,
-      { key: "Mod-b", run: toggleWrap("**") },
-      { key: "Mod-i", run: toggleWrap("*") },
-      { key: "Mod-e", run: toggleWrap("`") },
-      ...markdownKeymap,
+      ...(note ? completionKeymap : []),
+      ...(note ? [
+        { key: "Mod-b", run: toggleWrap("**") },
+        { key: "Mod-i", run: toggleWrap("*") },
+        { key: "Mod-e", run: toggleWrap("`") },
+        ...markdownKeymap,
+      ] : []),
       ...closeBracketsKeymap,
       ...defaultKeymap,
       ...searchKeymap,
@@ -428,13 +444,10 @@ function extensions(onUpdate: (u: ViewUpdate) => void): Extension[] {
       ...lintKeymap,
       indentWithTab,
     ]),
-    markdown({ base: markdownLanguage }),
+    note ? markdown({ base: markdownLanguage }) : [],
     EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
-    codePlugin,
-    wikiMarks,
-    lintExt,
-    linkClick,
-    fileDrop,
+    note ? [codePlugin, wikiMarks, lintExt, linkClick, fileDrop] : [],
+    mode.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
     EditorView.contentAttributes.of({ spellcheck: "false", autocorrect: "off", autocapitalize: "off" }),
     wrapCompartment.of(prefs.wrap ? EditorView.lineWrapping : []),
     guideCompartment.of(prefs.guides ? guidePlugin : []),
@@ -464,7 +477,8 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
  * search state never cross from one note into the next. The cursor goes to
  * pos (clamped), scrolled into view.
  */
-export function setDoc(view: EditorView, text: string, pos = 0): void {
+export function setDoc(view: EditorView, text: string, pos = 0, m: DocMode = { note: true, readOnly: false }): void {
+  mode = m;
   const anchor = Math.min(Math.max(0, pos), text.length);
   view.setState(EditorState.create({ doc: text, selection: { anchor }, extensions: extensions(updateFn) }));
   view.dispatch({ effects: EditorView.scrollIntoView(anchor, { y: "center" }), annotations: loaded.of(true) });

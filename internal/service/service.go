@@ -217,18 +217,25 @@ func (s *Service) forget(paths ...string) {
 
 // --- reading and searching ----------------------------------------------------
 
-// Search finds lines containing q in every note, ignoring case.
+// Search finds lines containing q in every note and every other text file
+// the editor can open, ignoring case.
 func (s *Service) Search(q string, limit int) ([]notebook.Hit, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
 		return nil, nil
 	}
-	docs, err := s.NB.List()
+	files, err := s.NB.Files()
 	if err != nil {
 		return nil, err
 	}
+	var docs []notebook.Doc
+	for _, f := range files {
+		if f.ReadOnly == "" {
+			docs = append(docs, f.Doc)
+		}
+	}
 	lq := strings.ToLower(q)
-	texts := s.texts(docs)
+	texts := s.textsOf(docs, true)
 	var out []notebook.Hit
 	for _, d := range docs {
 		if out = notebook.FindIn(out, d.Rel, texts[d.Rel], lq, limit); limit > 0 && len(out) >= limit {
@@ -240,7 +247,11 @@ func (s *Service) Search(q string, limit int) ([]notebook.Hit, error) {
 
 // texts is every listed note's text, from the cache when the file has not
 // changed since it was read.
-func (s *Service) texts(docs []notebook.Doc) map[string]string {
+func (s *Service) texts(docs []notebook.Doc) map[string]string { return s.textsOf(docs, false) }
+
+// textsOf is texts; prune (for the widest list, Search's) also drops from
+// the cache the files no longer listed.
+func (s *Service) textsOf(docs []notebook.Doc, prune bool) map[string]string {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	if s.cache == nil {
@@ -261,9 +272,11 @@ func (s *Service) texts(docs []notebook.Doc) map[string]string {
 		s.cache[d.Rel] = cached{mod: d.ModTime, size: d.Size, text: string(b)}
 		out[d.Rel] = string(b)
 	}
-	for p := range s.cache {
-		if !seen[p] {
-			delete(s.cache, p)
+	if prune {
+		for p := range s.cache {
+			if !seen[p] {
+				delete(s.cache, p)
+			}
 		}
 	}
 	return out

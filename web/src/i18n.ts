@@ -13,6 +13,8 @@ export interface Prefs {
   wrap: boolean;
   guides: boolean;
   numbers: boolean;
+  /** The file list: every text file, or the notes only. */
+  files: "all" | "notes";
 }
 
 declare global {
@@ -30,6 +32,7 @@ export const prefs: Prefs = {
   wrap: true,
   guides: true,
   numbers: true,
+  files: "all",
   ...window.jusPrefs,
 };
 

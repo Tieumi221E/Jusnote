@@ -2,7 +2,8 @@
 // CLI, so the app holds no behaviour the outside lacks. URLs are relative:
 // the page is served under a per-run token path.
 
-export type Doc = { rel: string; size: number; modTime: string };
+/** A file of the list: a note, or another text file (note false); readOnly says why one only shows. */
+export type Doc = { rel: string; size: number; modTime: string; note?: boolean; readOnly?: "encoding" | "size" };
 export type Source = { author?: string; model?: string; run?: string };
 export type Commit = { hash: string; message: string; when: string; author: string; source: Source };
 export type Change = { path: string; kind: "new" | "modified" | "deleted"; source: Source; tracked: boolean; mine: boolean };
@@ -87,7 +88,6 @@ export const api = {
   links: (path: string, text?: string) => j<{ out: Link[]; back: Backlink[] }>("api/links", send("POST", { path, text })),
   resolve: (target: string, from: string) => j<{ path: string }>("api/resolve?target=" + q(target) + "&from=" + q(from)),
   attach: (note: string, name: string, data: string) => j<{ path: string; link: string }>("api/attach", send("POST", { note, name, data })),
-  agents: (force = false) => j<{ files: { path: string; action: string }[]; committed: boolean }>("api/agents", send("POST", { force })),
   selftest: (report: unknown) => j<unknown>("api/selftest", send("POST", report)),
   history: (limit = 20) => j<Commit[]>("api/history?limit=" + limit),
   session: {

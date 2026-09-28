@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Tieumi221E/Jus/conform"
 )
 
 // The CLI as an agent meets it: a built binary, run in a notebook folder.
@@ -20,6 +23,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	bin = filepath.Join(dir, "jusnote.exe")
+	// A window of the person's own (if one is open) is not these tests' to tell.
+	os.Setenv("JUSNOTE_DATA", filepath.Join(dir, "jusnote-data")) // named as a release names it (conformance checks the footprint)
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
@@ -320,5 +325,167 @@ func TestDeleteDiscardShowRestoreTypesAttach(t *testing.T) {
 	}
 	if s := must(t, run(t, nb, nil, "", "status")).stdout; strings.TrimSpace(s) != "" {
 		t.Fatalf("every command above commits what it changed; status:\n%s", s)
+	}
+}
+
+// Two agent sessions and a person edit the notebook; one session is undone:
+// its changes go back, the other session's stay, and a file the person
+// changed since is reported, not overwritten.
+func TestRevertASession(t *testing.T) {
+	nb := t.TempDir()
+	must(t, run(t, nb, nil, "", "init"))
+	must(t, run(t, nb, nil, "", "write", "a.md", "-text", "a0\n"))
+	must(t, run(t, nb, nil, "", "write", "b.md", "-text", "b0\n"))
+	must(t, run(t, nb, nil, "", "write", "c.md", "-text", "c0\n"))
+	as := func(session string) []string {
+		return []string{"JUS_AUTHOR=agent", "JUS_HARNESS=test-harness", "JUS_RUN=" + session}
+	}
+	must(t, run(t, nb, as("A"), "", "write", "a.md", "-text", "a1 by A\n"))
+	must(t, run(t, nb, as("A"), "", "write", "new.md", "-text", "made by A\n"))
+	must(t, run(t, nb, as("B"), "", "write", "b.md", "-text", "b1 by B\n"))
+	must(t, run(t, nb, as("A"), "", "write", "c.md", "-text", "c1 by A\n"))
+	must(t, run(t, nb, nil, "", "write", "c.md", "-text", "c2 by the person\n"))
+
+	var cs []struct {
+		Source struct{ Harness, Run string }
+	}
+	decodeJSON(t, must(t, run(t, nb, nil, "", "log", "-session", "A", "-json")).stdout, &cs)
+	if len(cs) != 3 || cs[0].Source.Harness != "test-harness" {
+		t.Fatalf("log -session A: %+v", cs)
+	}
+	// The plan first; then for real.
+	r := run(t, nb, nil, "", "revert", "-session", "A", "-json")
+	if r.code != exitUsage || !strings.Contains(r.stderr, `"plan"`) {
+		t.Fatalf("revert without -yes: %d %s", r.code, r.stderr)
+	}
+	var res struct {
+		Steps     []struct{ Path, State string }
+		Committed bool
+	}
+	decodeJSON(t, must(t, run(t, nb, nil, "", "revert", "-session", "A", "-yes", "-json")).stdout, &res)
+	states := map[string]string{}
+	for _, s := range res.Steps {
+		states[s.Path] = s.State
+	}
+	if states["a.md"] != "done" || states["new.md"] != "done" || states["c.md"] != "conflict" || !res.Committed {
+		t.Fatalf("revert steps %+v", res)
+	}
+	read := func(p string) string { b, _ := os.ReadFile(filepath.Join(nb, p)); return string(b) }
+	if read("a.md") != "a0\n" || read("b.md") != "b1 by B\n" || read("c.md") != "c2 by the person\n" {
+		t.Fatalf("after revert: a=%q b=%q c=%q", read("a.md"), read("b.md"), read("c.md"))
+	}
+	if _, err := os.Stat(filepath.Join(nb, "new.md")); !os.IsNotExist(err) {
+		t.Fatal("the note session A made is still there")
+	}
+	if s := must(t, run(t, nb, nil, "", "status")).stdout; strings.TrimSpace(s) != "" {
+		t.Fatalf("the revert is committed; status:\n%s", s)
+	}
+}
+
+// A notebook's skill: listed, refused until confirmed (the plan says what
+// it runs), then run in the notebook; what it writes through jusnote is
+// marked as the skill's.
+func TestSkills(t *testing.T) {
+	nb := t.TempDir()
+	must(t, run(t, nb, nil, "", "init"))
+	dir := filepath.Join(nb, ".jusnote", "skills", "digest")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: digest\ndescription: writes a digest note\n---\n"), 0o644)
+	spec, _ := json.Marshal(map[string]any{"run": []string{bin, "write", "digest.md", "-text", "# Digest\n"}})
+	os.WriteFile(filepath.Join(dir, "skill.json"), spec, 0o644)
+
+	var list []struct {
+		Name    string `json:"name"`
+		Trusted bool   `json:"trusted"`
+	}
+	decodeJSON(t, must(t, run(t, nb, nil, "", "skills", "list", "-json")).stdout, &list)
+	if len(list) != 1 || list[0].Name != "digest" || list[0].Trusted {
+		t.Fatalf("skills list: %+v", list)
+	}
+	r := run(t, nb, nil, "", "skills", "run", "digest", "-json")
+	var refusal struct {
+		Kind string `json:"kind"`
+		Plan struct {
+			Command []string `json:"command"`
+		} `json:"plan"`
+	}
+	decodeJSON(t, r.stderr, &refusal)
+	if r.code == 0 || refusal.Kind != "confirm" || len(refusal.Plan.Command) == 0 || refusal.Plan.Command[0] != bin {
+		t.Fatalf("unconfirmed run: exit %d %s", r.code, r.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(nb, "digest.md")); err == nil {
+		t.Fatal("the skill ran without -yes")
+	}
+	var res struct {
+		Exit int `json:"exit"`
+	}
+	decodeJSON(t, must(t, run(t, nb, nil, "", "skills", "run", "digest", "-yes", "-json")).stdout, &res)
+	if res.Exit != 0 {
+		t.Fatalf("skill exit %d", res.Exit)
+	}
+	must(t, run(t, nb, nil, "", "skills", "run", "digest", "-json")) // confirmed: no -yes needed now
+	// A skill that fails is a failed call.
+	bad := filepath.Join(nb, ".jusnote", "skills", "bad")
+	os.MkdirAll(bad, 0o755)
+	os.WriteFile(filepath.Join(bad, "SKILL.md"), []byte("---\nname: bad\n---\n"), 0o644)
+	spec, _ = json.Marshal(map[string]any{"run": []string{bin, "no-such-command"}})
+	os.WriteFile(filepath.Join(bad, "skill.json"), spec, 0o644)
+	if r := run(t, nb, nil, "", "skills", "run", "bad", "-yes", "-json"); r.code != 1 || !strings.Contains(r.stderr, "exited 2") {
+		t.Fatalf("failing skill: exit %d, stderr %s", r.code, r.stderr)
+	}
+	log := must(t, run(t, nb, nil, "", "log", "-json")).stdout
+	if !strings.Contains(log, "skill/digest") {
+		t.Fatalf("the skill's commit is not marked as its own:\n%s", log)
+	}
+	if _, err := os.Stat(filepath.Join(nb, ".jusnote", "out", "digest", "last.log")); err != nil {
+		t.Fatal("no output folder:", err)
+	}
+	if st := must(t, run(t, nb, nil, "", "status", "-json")).stdout; strings.Contains(st, "out/") {
+		t.Fatalf("the output folder shows as a change: %s", st)
+	}
+}
+
+// link: the editor's jus:// link, from the command line.
+func TestLink(t *testing.T) {
+	nb := t.TempDir()
+	for args, want := range map[[3]string]string{
+		{"link", "读书/某 书.md", "-line=1"}: "jus://note/%E8%AF%BB%E4%B9%A6/%E6%9F%90%20%E4%B9%A6.md",
+		{"link", "a.md", "-line=12"}:     "jus://note/a.md?line=12",
+	} {
+		if got := strings.TrimSpace(must(t, run(t, nb, nil, "", args[:]...)).stdout); got != want {
+			t.Errorf("%v = %s, want %s", args, got, want)
+		}
+	}
+}
+
+// The Jus conformance test (the Jus module's conform), on this build.
+func TestConformance(t *testing.T) {
+	rep := conform.Run(context.Background(), bin, t.TempDir(), nil)
+	for _, c := range rep.Checks {
+		if !c.OK {
+			t.Errorf("%s: %s", c.Name, c.Detail)
+		}
+	}
+	if len(rep.Checks) < 10 {
+		t.Fatalf("only %d checks ran", len(rep.Checks))
+	}
+}
+
+// link preview: a note here, and another app's link when that app is not
+// installed (it says so; it is not an error).
+func TestLinkPreview(t *testing.T) {
+	nb := t.TempDir()
+	must(t, run(t, nb, nil, "", "write", "a.md", "-text", "# Title A\n\ntext\n"))
+	var p map[string]any
+	decodeJSON(t, must(t, run(t, nb, nil, "", "link", "preview", "jus://note/a.md?line=2", "-json")).stdout, &p)
+	if p["title"] != "Title A" || p["exists"] != true || p["line"] != float64(2) {
+		t.Fatalf("note preview: %v", p)
+	}
+	decodeJSON(t, must(t, run(t, nb, []string{"JUS_JUSZZZ_EXE="}, "", "link", "preview", "jus://zzz/x", "-json")).stdout, &p)
+	if p["app"] != "juszzz" || p["installed"] != false {
+		t.Fatalf("missing app: %v", p)
+	}
+	if r := run(t, nb, nil, "", "link", "preview", "https://example.com"); r.code != 2 {
+		t.Fatalf("not a jus link: exit %d", r.code)
 	}
 }

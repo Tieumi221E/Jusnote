@@ -7,6 +7,7 @@
 // editor transactions, so "keystroke to paint" here is the editor's own
 // update + layout + paint, without the OS input path. Say so in results.
 
+import { capCoverage } from "./coverage.ts";
 import type { EditorView } from "@codemirror/view";
 import { api } from "./api.ts";
 import { prefs, setPref } from "./i18n.ts";
@@ -26,6 +27,8 @@ export type Hooks = {
   setRendered: (on: boolean) => void;
   preview: HTMLElement;
   dialogButtons: () => HTMLButtonElement[];
+  /** The palette's commands, each naming its capabilities (coverage.ts). */
+  commands: () => { zh: string; cap: string }[];
 };
 
 type Stat = { n: number; p50: number; p95: number; max: number; unit: string };
@@ -106,6 +109,10 @@ export async function runSelftest(h: Hooks): Promise<void> {
   try {
     const notes = h.notes();
     check("notebook has notes", notes.length > 0, `${notes.length} notes`);
+    // Every control and command names a capability the command line has too.
+    const cov = await capCoverage(h.commands());
+    check("every control and command names its capability", cov.missing.length === 0 && cov.unknown.length === 0,
+      `${cov.controls} controls, ${cov.commands} commands; missing ${cov.missing.join(", ") || "none"}; unknown ${cov.unknown.join(", ") || "none"}`);
 
     // Opening / switching notes (read + fresh editor state + gutter + paint).
     const sample = notes.slice(0, 30);
@@ -232,6 +239,7 @@ export async function runSelftest(h: Hooks): Promise<void> {
     const eolDiff = await api.diff(eol);
     const eolGutter = await api.gutter(eol);
     check("a line-ending-only change shows as that, not as every line changed", eolDiff.eolOnly && eolDiff.hunks.length === 0 && eolGutter.length === 0, JSON.stringify({ eol: eolDiff.eolOnly, hunks: eolDiff.hunks.length, marks: eolGutter.length }));
+    await api.discard(eol); // the outside change is left for review by design; the run ends clean
 
     // Back and forward through the notes opened.
     await h.open(keep);

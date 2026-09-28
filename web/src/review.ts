@@ -28,6 +28,7 @@ export type Host = {
 const el = document.createElement("aside");
 el.id = "review";
 el.className = "panel layer";
+el.dataset.cap = "status diff commit discard log show restore"; // review and history
 el.innerHTML = '<header><h2></h2><span class="grow"></span><button class="text" data-act="all"></button></header><ul class="rv-list" role="listbox"></ul><div class="rv-diff"></div><footer class="rv-actions"></footer>';
 document.body.append(el);
 const titleEl = el.querySelector("h2")!;

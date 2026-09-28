@@ -1,3 +1,5 @@
+import * as live from "./live.ts";
+import { cap, CapError } from "./cap.ts";
 import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
 import { api, ConflictError, type Backlink, type Change, type Doc, type GitChange, type Hit, type Session } from "./api.ts";
@@ -23,12 +25,19 @@ import * as review from "./review.ts";
 import { initTips } from "./tip.ts";
 import { runSelftest } from "./selftest.ts";
 
+/** A Markdown note (links, preview, record types); the other files are plain text. */
+const isNotePath = (rel: string) => /\.(md|markdown)$/i.test(rel);
+const isNote = (d: Doc) => d.note ?? isNotePath(d.rel);
+
 declare global {
   interface Window {
     kpTitle?: (t: string) => void;
     kpReveal?: (path: string) => void;
+    kpTerminal?: (dir: string) => Promise<void>;
     kpPickFolder?: (title: string) => Promise<string> | string;
     kpOpenExternal?: (url: string) => void;
+    kpOpenJus?: (url: string) => Promise<string>;
+    kpFront?: () => Promise<void>;
     jusVersion?: string;
   }
 }
@@ -284,6 +293,63 @@ async function saveAndCommit() {
   }
 }
 
+type Skill = { name: string; description?: string; run?: string[]; trusted: boolean; problem?: string; out: string };
+type SkillResult = { skill: string; exit: number; ms: number; out: string; files: string[]; tail: string; timedOut?: boolean };
+
+/** Runs one of the notebook's skills (.jusnote/skills); a new or changed one is shown and asked about first. */
+async function runSkill() {
+  const all = await cap<Skill[]>("skills.list").catch((e) => (toast(msg(e), true), null));
+  if (!all) return;
+  const runnable = all.filter((s) => s.run && !s.problem);
+  if (!runnable.length) {
+    toast(L("没有可运行的技能（.jusnote/skills）", "実行できるスキルがありません（.jusnote/skills）"));
+    return;
+  }
+  const pick = await ask({
+    title: L("运行技能", "スキルを実行"),
+    options: runnable.map((s) => ({ value: s.name, label: s.description ? `${s.name} — ${s.description}` : s.name })),
+    choices: [{ label: L("运行", "実行"), value: true, primary: true }, { label: L("取消", "キャンセル"), value: false }],
+    cancel: false,
+  });
+  if (!pick.value) return;
+  const name = pick.text;
+  let r: SkillResult;
+  try {
+    r = await cap<SkillResult>("skills.run", { name });
+  } catch (e) {
+    if (!(e instanceof CapError) || e.kind !== "confirm") return toast(msg(e), true);
+    const plan = e.plan as { command: string[] };
+    const ok = await ask({
+      title: L("运行这个程序？", "このプログラムを実行しますか？"),
+      body: L("技能随笔记本而来，改动后会再问。", "スキルはノートブックに付属。変更されたら再確認します。") + "\n\n" + plan.command.map((a) => (root && a.toLowerCase().startsWith(root.toLowerCase()) ? "." + a.slice(root.replace(/[\\/]+$/, "").length) : a)).join(" "),
+      choices: [{ label: L("运行", "実行"), value: true, primary: true }, { label: L("取消", "キャンセル"), value: false }],
+      cancel: false,
+    });
+    if (!ok.value) return;
+    try {
+      r = await cap<SkillResult>("skills.run", { name, yes: true });
+    } catch (e2) {
+      return toast(msg(e2), true);
+    }
+  }
+  toast(L("完成：", "完了：") + `${r.skill} · ${r.files.length} ${L("个文件", "ファイル")}`); // a failed run is an error, shown above
+  if (r.files.length) window.kpReveal?.(r.out.replace(/[\\/]+$/, "") + "\\" + r.files[0].replace(/\//g, "\\"));
+  void refreshGit();
+}
+
+/** The notebook's commit setting (kept in it): manual leaves committing to Ctrl+S. */
+async function toggleAutoCommit() {
+  try {
+    const cur = await cap<{ commit: string }>("config.get");
+    const next = cur.commit === "manual" ? "auto" : "manual";
+    await cap("config.set", { commit: next });
+    toast(next === "auto" ? L("自动提交：开", "自動コミット：オン") : L("自动提交：关，按 Ctrl+S 提交", "自動コミット：オフ、Ctrl+S でコミット"));
+    void refreshGit();
+  } catch (e) {
+    toast(msg(e), true);
+  }
+}
+
 /** Before leaving a note: write what is unsaved and commit what the app wrote to it. */
 async function leaveNote(): Promise<boolean> {
   if (!currentPath) return true;
@@ -373,7 +439,7 @@ function renderFiles() {
         if (open) walk(n.children, depth + 1);
       } else {
         const rv = toReview.get(n.path);
-        li.className = "file" + (n.path === currentPath ? " active" : "") + (rv ? " review" + (rv.source?.author === "agent" ? " agent" : "") : changedFiles.includes(n.path) ? " changed" : "");
+        li.className = "file" + (isNotePath(n.path) ? "" : " text") + (n.path === currentPath ? " active" : "") + (rv ? " review" + (rv.source?.author === "agent" ? " agent" : "") : changedFiles.includes(n.path) ? " changed" : "");
         li.textContent = n.name.replace(/\.(md|markdown)$/i, "");
         li.title = rv ? `${n.path} · ${rv.source?.author === "agent" ? L("agent 改过，待审阅", "agent が変更・レビュー待ち") : L("别处改过，待审阅", "外部で変更・レビュー待ち")}` : n.path;
         li.addEventListener("click", () => {
@@ -388,14 +454,14 @@ function renderFiles() {
       });
     }
   };
-  walk(buildTree(docs.map((d) => d.rel)), 0);
+  walk(buildTree(docs.filter((d) => prefs.files === "all" || isNote(d)).map((d) => d.rel)), 0);
   if (!items.length) items.push(emptyItem(opened ? L("还没有笔记", "ノートはまだありません") : L("未打开笔记本", "ノートブックが開かれていません")));
   filesEl.replaceChildren(...items);
 }
 
 async function refreshFiles() {
   docs = opened ? await api.list().catch(() => []) : [];
-  setNotes(docs);
+  setNotes(docs.filter(isNote)); // links and completion are the notes
   renderFiles();
   showEmpty(opened && docs.length === 0);
 }
@@ -409,18 +475,23 @@ function emptyItem(text: string): HTMLLIElement {
 
 // The context menu of the file tree.
 function showMenu(x: number, y: number, n: TreeNode) {
-  const entries: [string, () => void][] = n.dir
-    ? [[L("在这里新建笔记…", "ここに新規ノート…"), () => void newNote(n.path + "/")]]
+  // [label, capability (coverage.ts), action]
+  const entries: [string, string, () => void][] = n.dir
+    ? [
+        [L("在这里新建笔记…", "ここに新規ノート…"), "write", () => void newNote(n.path + "/")],
+        [L("在终端中打开", "ターミナルで開く"), "ui:shell", () => openTerminal(n.path)],
+      ]
     : [
-        [L("打开", "開く"), () => void openFile(n.path)],
-        [L("重命名…", "名前を変更…"), () => void renameNote(n.path)],
-        [L("复制 jus:// 链接", "jus:// リンクをコピー"), () => void copyLink(n.path)],
-        [L("在资源管理器中显示", "エクスプローラーで表示"), () => reveal(n.path)],
-        [L("删除…", "削除…"), () => void deleteNote(n.path)],
+        [L("打开", "開く"), "editor.open", () => void openFile(n.path)],
+        [L("重命名…", "名前を変更…"), "rename", () => void renameNote(n.path)],
+        [L("复制 jus:// 链接", "jus:// リンクをコピー"), "link", () => void copyLink(n.path)],
+        [L("在资源管理器中显示", "エクスプローラーで表示"), "ui:shell", () => reveal(n.path)],
+        [L("删除…", "削除…"), "delete", () => void deleteNote(n.path)],
       ];
   menu.replaceChildren(
-    ...entries.map(([label, run], i) => {
+    ...entries.map(([label, capName, run], i) => {
       const b = document.createElement("button");
+      b.dataset.cap = capName;
       b.className = "wide" + (!n.dir && i === entries.length - 1 ? " danger" : "");
       b.textContent = label;
       b.addEventListener("click", () => {
@@ -473,7 +544,14 @@ async function openFile(path: string, pos?: number) {
     tracked = note.tracked;
     dirty = false;
     conflict = false;
-    setDoc(editor, note.text, pos ?? session.cursors[path] ?? 0);
+    // A note, or another text file: plain text, read-only when it cannot be written back as it was.
+    const info = docs.find((d) => d.rel === path);
+    const asNote = isNotePath(path);
+    const readOnly = info?.readOnly;
+    setDoc(editor, note.text, pos ?? session.cursors[path] ?? 0, { note: asNote, readOnly: !!readOnly });
+    if (!asNote && rendered) setRendered(false);
+    const enc = (note as { encoding?: string }).encoding ?? "";
+    if (readOnly) toast(readOnly === "encoding" ? L(`只读：${enc.toUpperCase()} 编码`, `読み取り専用：${enc.toUpperCase()}`) : L("只读：文件过大", "読み取り専用：ファイルが大きすぎます"));
     setLintPath(path);
     forceLint(editor);
     words = wordCount(note.text);
@@ -618,6 +696,13 @@ async function deleteNote(path = currentPath) {
   }
 }
 
+/** A terminal in the notebook's folder rel ("" : the notebook itself). */
+function openTerminal(rel = "") {
+  if (!root) return;
+  const dir = root.replace(/[\\/]+$/, "") + (rel ? "\\" + rel.replace(/\//g, "\\") : "");
+  window.kpTerminal?.(dir).catch((e) => toast(msg(e), true));
+}
+
 /** Shows a note in Explorer (the shell wants an absolute path). */
 function reveal(rel: string) {
   if (rel && root) window.kpReveal?.(root.replace(/[\\/]+$/, "") + "\\" + rel.replace(/\//g, "\\"));
@@ -626,7 +711,7 @@ function reveal(rel: string) {
 async function copyLink(path = currentPath) {
   if (!path) return;
   const line = path === currentPath ? editor.state.doc.lineAt(editor.state.selection.main.head).number : 0;
-  const link = "jus://note/" + path.split("/").map(encodeURIComponent).join("/") + (line > 1 ? "?line=" + line : "");
+  const { link } = await cap<{ link: string }>("link", { path, line });
   try {
     await navigator.clipboard.writeText(link);
     toast(L("已复制 ", "コピーしました：") + link);
@@ -835,6 +920,38 @@ function noteDir(): string {
 
 function renderPreview(text: string) {
   renderInto(preview, text, noteDir());
+  void decorateJusLinks();
+}
+
+type LinkPreview = { app: string; installed: boolean; title?: string; at?: number; watched?: boolean; progress?: number; exists?: boolean; problem?: string };
+const linkPreviews = new Map<string, Promise<LinkPreview | null>>();
+
+const clock = (s: number) => {
+  const t = Math.floor(s), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+};
+
+/** jus:// links in the preview: what they point to, asked of their app (link.preview); a missing app says so. */
+async function decorateJusLinks() {
+  for (const a of preview.querySelectorAll<HTMLAnchorElement>('a[href^="jus://"]')) {
+    const href = a.getAttribute("href")!;
+    if (!linkPreviews.has(href)) linkPreviews.set(href, cap<LinkPreview>("link.preview", { link: href }).catch(() => null));
+    const p = await linkPreviews.get(href);
+    if (!p || !a.isConnected) continue;
+    a.classList.add("jus-link", "jus-" + p.app.replace(/^jus/, ""));
+    a.classList.toggle("jus-missing", !p.installed || p.exists === false || !!p.problem);
+    const name = p.app.replace(/^jus/, "Jus");
+    if (!p.installed) a.title = L("未安装 ", "未インストール：") + name;
+    else if (p.problem) a.title = name + L(" 打不开：", " で開けません：") + p.problem; // the app's own words, after ours
+    else if (p.exists === false) a.title = L("没有这篇笔记", "このノートはありません");
+    else {
+      const parts = [p.title ?? ""];
+      if (p.at) parts.push(clock(p.at));
+      if (p.watched) parts.push(L("已看完", "視聴済み"));
+      else if (p.progress && p.progress > 0.01) parts.push(L("看到 ", "視聴 ") + Math.round(p.progress * 100) + "%");
+      a.title = parts.filter(Boolean).join(" · ");
+    }
+  }
 }
 
 /** Opens the note a wiki link names; offers to create it when there is none. */
@@ -871,7 +988,10 @@ function followLink(href: string) {
   } else if (/^(https?:|mailto:)/i.test(href)) {
     window.kpOpenExternal?.(href);
   } else if (/^jus:\/\//.test(href)) {
-    toast(L("这个链接属于另一个 Jus 应用：", "別の Jus アプリのリンクです：") + href);
+    // Another Jus app's (jus://play/… is Jusplay's): it opens there.
+    void (window.kpOpenJus?.(href) ?? Promise.resolve("notinstalled")).then((r) => {
+      if (r === "notinstalled") toast(L("未安装 ", "未インストール：") + "Jus" + href.split("/")[2]); // as the link's tooltip says
+    }, (e) => toast(String(e)));
   } else if (/\.(md|markdown)(#.*)?$/i.test(href)) {
     const dir = currentPath.includes("/") ? currentPath.slice(0, currentPath.lastIndexOf("/") + 1) : "";
     const parts: string[] = [];
@@ -1186,37 +1306,42 @@ async function runItem(it: Item) {
   await it.run();
 }
 
-type Command = { zh: string; ja: string; key?: string; run: () => void | Promise<void>; when?: () => boolean };
+/** cap: the capabilities it uses (coverage.ts), "ui" when it only moves the view. */
+type Command = { zh: string; ja: string; cap: string; key?: string; run: () => void | Promise<void>; when?: () => boolean };
 
 function commandList(): Command[] {
   const hasNote = () => !!currentPath;
   return [
-    { zh: "新建笔记…", ja: "新規ノート…", key: "Ctrl N", run: () => newNote() },
-    { zh: "搜索笔记…", ja: "ノートを検索…", key: "Ctrl P", run: () => openPalette("search") },
-    { zh: "在当前笔记中查找", ja: "このノート内を検索", key: "Ctrl F", run: () => findInNote(), when: hasNote },
-    { zh: "保存并提交", ja: "保存してコミット", key: "Ctrl S", run: saveAndCommit, when: hasNote },
-    { zh: "审阅改动…", ja: "変更をレビュー…", key: "Ctrl Shift G", run: commitAll, when: () => toReview.size > 0 },
-    { zh: "这篇笔记的历史…", ja: "このノートの履歴…", key: "Ctrl Shift H", run: () => review.openHistory(currentPath), when: hasNote },
-    { zh: "插入指向笔记的链接", ja: "ノートへのリンクを挿入", key: "[[", run: () => insertAtCursor("[["), when: hasNote },
-    { zh: "预览 / 源码", ja: "プレビュー / ソース", key: "Ctrl Shift V", run: () => setRendered(!rendered), when: hasNote },
-    { zh: "文件", ja: "ファイル", key: "Ctrl O", run: () => toggleFiles() },
-    { zh: "大纲与历史", ja: "アウトラインと履歴", key: "Ctrl J", run: () => toggleRail() },
-    { zh: "重命名当前笔记…", ja: "このノートの名前を変更…", run: () => renameNote(), when: hasNote },
-    { zh: "删除当前笔记…", ja: "このノートを削除…", run: () => deleteNote(), when: hasNote },
-    { zh: "复制当前行的 jus:// 链接", ja: "この行の jus:// リンクをコピー", run: () => copyLink(), when: hasNote },
-    { zh: "在资源管理器中显示", ja: "エクスプローラーで表示", run: () => reveal(currentPath), when: hasNote },
-    { zh: "快速记录到日志…", ja: "日誌にすばやく記録…", run: quickCapture },
-    { zh: "让 AI agent 能在这里工作…", ja: "AI エージェントがここで作業できるようにする…", run: prepareAgents, when: () => opened },
-    { zh: "打开笔记本文件夹…", ja: "ノートブックのフォルダーを開く…", run: chooseNotebook },
-    { zh: "增大字号", ja: "文字を大きく", key: "Ctrl +", run: () => bumpSize(1) },
-    { zh: "减小字号", ja: "文字を小さく", key: "Ctrl -", run: () => bumpSize(-1) },
-    { zh: "恢复默认字号", ja: "文字サイズを既定に戻す", key: "Ctrl 0", run: () => setPref("size", SIZE_DEFAULT) },
-    { zh: "切换日间 / 夜间", ja: "ライト / ダークを切り替え", run: () => setPref("theme", prefs.theme === "dark" ? "light" : "dark") },
-    { zh: "切换到日本語", ja: "中文に切り替え", run: () => setPref("lang", prefs.lang === "ja" ? "zh" : "ja") },
-    { zh: "快捷键", ja: "ショートカット", key: "F1", run: showHelp },
-    { zh: "后退", ja: "戻る", key: "Alt ←", run: goBack, when: () => back.length > 0 },
-    { zh: "前进", ja: "進む", key: "Alt →", run: goForward, when: () => forward.length > 0 },
-    { zh: "复制诊断日志", ja: "診断ログをコピー", run: copyLog },
+    { zh: "新建笔记…", ja: "新規ノート…", cap: "write", key: "Ctrl N", run: () => newNote() },
+    { zh: "搜索笔记…", ja: "ノートを検索…", cap: "search list", key: "Ctrl P", run: () => openPalette("search") },
+    { zh: "在当前笔记中查找", ja: "このノート内を検索", cap: "ui", key: "Ctrl F", run: () => findInNote(), when: hasNote },
+    { zh: "保存并提交", ja: "保存してコミット", cap: "write commit", key: "Ctrl S", run: saveAndCommit, when: hasNote },
+    { zh: "审阅改动…", ja: "変更をレビュー…", cap: "status diff commit discard", key: "Ctrl Shift G", run: commitAll, when: () => toReview.size > 0 },
+    { zh: "这篇笔记的历史…", ja: "このノートの履歴…", cap: "log show restore", key: "Ctrl Shift H", run: () => review.openHistory(currentPath), when: hasNote },
+    { zh: "插入指向笔记的链接", ja: "ノートへのリンクを挿入", cap: "list", key: "[[", run: () => insertAtCursor("[["), when: hasNote },
+    { zh: "预览 / 源码", ja: "プレビュー / ソース", cap: "ui", key: "Ctrl Shift V", run: () => setRendered(!rendered), when: hasNote },
+    { zh: "文件", ja: "ファイル", cap: "list", key: "Ctrl O", run: () => toggleFiles() },
+    { zh: "大纲与历史", ja: "アウトラインと履歴", cap: "log", key: "Ctrl J", run: () => toggleRail() },
+    { zh: "重命名当前笔记…", ja: "このノートの名前を変更…", cap: "rename", run: () => renameNote(), when: hasNote },
+    { zh: "删除当前笔记…", ja: "このノートを削除…", cap: "delete", run: () => deleteNote(), when: hasNote },
+    { zh: "复制当前行的 jus:// 链接", ja: "この行の jus:// リンクをコピー", cap: "link", run: () => copyLink(), when: hasNote },
+    { zh: "在资源管理器中显示", ja: "エクスプローラーで表示", cap: "ui:shell", run: () => reveal(currentPath), when: hasNote },
+    { zh: "在终端中打开笔记本", ja: "ノートブックをターミナルで開く", cap: "ui:shell", run: () => openTerminal(), when: () => opened },
+    { zh: "快速记录到日志…", ja: "日誌にすばやく記録…", cap: "capture", run: quickCapture },
+    { zh: "让 AI agent 能在这里工作…", ja: "AI エージェントがここで作業できるようにする…", cap: "agents", run: prepareAgents, when: () => opened },
+    { zh: "打开笔记本文件夹…", ja: "ノートブックのフォルダーを開く…", cap: "notebook.open", run: chooseNotebook },
+    { zh: "增大字号", ja: "文字を大きく", cap: "prefs.set", key: "Ctrl +", run: () => bumpSize(1) },
+    { zh: "减小字号", ja: "文字を小さく", cap: "prefs.set", key: "Ctrl -", run: () => bumpSize(-1) },
+    { zh: "恢复默认字号", ja: "文字サイズを既定に戻す", cap: "prefs.set", key: "Ctrl 0", run: () => setPref("size", SIZE_DEFAULT) },
+    { zh: "切换日间 / 夜间", ja: "ライト / ダークを切り替え", cap: "prefs.set", run: () => setPref("theme", prefs.theme === "dark" ? "light" : "dark") },
+    { zh: "运行技能…", ja: "スキルを実行…", cap: "skills.list skills.run", when: () => opened, run: () => void runSkill() },
+    { zh: "自动提交：开 / 关（本笔记本）", ja: "自動コミット：オン / オフ（このノートブック）", cap: "config.get config.set", when: () => opened, run: toggleAutoCommit },
+    { zh: "文件列表：显示所有文本文件 / 只看笔记", ja: "ファイル一覧：すべてのテキスト / ノートのみ", cap: "prefs.set", run: () => { setPref("files", prefs.files === "all" ? "notes" : "all"); renderFiles(); } },
+    { zh: "切换到日本語", ja: "中文に切り替え", cap: "prefs.set", run: () => setPref("lang", prefs.lang === "ja" ? "zh" : "ja") },
+    { zh: "快捷键", ja: "ショートカット", cap: "ui", key: "F1", run: showHelp },
+    { zh: "后退", ja: "戻る", cap: "editor.open", key: "Alt ←", run: goBack, when: () => back.length > 0 },
+    { zh: "前进", ja: "進む", cap: "editor.open", key: "Alt →", run: goForward, when: () => forward.length > 0 },
+    { zh: "复制诊断日志", ja: "診断ログをコピー", cap: "ui", run: copyLog },
   ];
 }
 
@@ -1295,7 +1420,7 @@ async function prepareAgents() {
   });
   if (!value) return;
   try {
-    const r = await api.agents();
+    const r = await cap<{ files: { path: string; action: string }[]; committed: boolean }>("agents");
     const words = { written: L("已写入", "作成"), updated: L("已更新", "更新"), unchanged: L("未变", "変更なし"), kept: L("保留你的", "既存を保持") } as Record<string, string>;
     toast(r.files.map((f) => `${f.path} ${words[f.action] ?? f.action}`).join("\n"));
     await refreshFiles();
@@ -1584,6 +1709,33 @@ function wire() {
   // Outside edits are looked for while the window is in use, and at once
   // when it comes back.
   window.setInterval(() => void watch(), WATCH_MS);
+  // The live session (live.ts): what is shown, for the command line; its
+  // commands; and changes made elsewhere, shown at once.
+  live.setState(() => ({
+    page: opened ? "editor" : "welcome", path: currentPath || undefined,
+    line: currentPath ? editor.state.doc.lineAt(editor.state.selection.main.head).number : undefined, dirty,
+  }));
+  live.listen(async (c) => {
+    window.kpFront?.().catch(() => undefined);
+    if (c.cmd === "notebook" && c.folder) return openNotebook(c.folder);
+    if (c.cmd === "pref" && c.key) {
+      setPref(c.key as keyof typeof prefs, c.value as never);
+      if (c.key === "files") renderFiles();
+      return;
+    }
+    if (c.cmd !== "open" || !c.path) throw new Error(`not an editor command: ${c.cmd}`);
+    await openFile(c.path);
+    if (currentPath !== c.path) throw new Error("the note did not open (unsaved changes kept?)");
+    if (c.line) gotoLine(c.line);
+    live.report();
+  }, (ev) => {
+    if (ev.kind !== "changed" || ev.source?.via === "window") return;
+    void watch();
+    void refreshGit();
+    void refreshFiles();
+    void review.refreshOpen();
+  });
+  for (const ev of ["keyup", "mouseup"]) window.addEventListener(ev, () => live.report());
   window.addEventListener("focus", () => {
     void watch();
     void refreshGit();
@@ -1696,6 +1848,7 @@ async function init() {
       setRendered,
       preview,
       dialogButtons: () => [...document.querySelectorAll<HTMLButtonElement>("#dialog.open .dialog-actions button")],
+      commands: commandList,
     });
   }
 }

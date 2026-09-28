@@ -3,6 +3,8 @@ package service
 import (
 	"fmt"
 	"strings"
+
+	"github.com/Tieumi221E/Jus/skills"
 )
 
 // The notebook's agent guide. Coding agents read a project file when they
@@ -13,7 +15,10 @@ import (
 // notebook is the user's), never over an existing file without -force.
 const agentsMarker = "<!-- written by jusnote agents -->"
 
-func agentGuide(exe string, svc *Service) string {
+// agentGuide is AGENTS.md; commands is the list of every command, made from
+// the capability registry (caps.CommandList), so the guide and help -json
+// cannot disagree.
+func agentGuide(exe string, svc *Service, commands string) string {
 	var types strings.Builder
 	for _, t := range svc.Types {
 		fmt.Fprintf(&types, "- `%s` (%s)", t.ID, t.Name)
@@ -31,6 +36,22 @@ func agentGuide(exe string, svc *Service) string {
 	}
 	if types.Len() == 0 {
 		types.WriteString("- (none)\n")
+	}
+	var sk strings.Builder
+	if list, err := skills.List(svc.NB.Vault(), nil); err == nil {
+		for _, s := range list {
+			fmt.Fprintf(&sk, "- `%s`", s.Name)
+			if s.Description != "" {
+				fmt.Fprintf(&sk, ": %s", s.Description)
+			}
+			if s.Run == nil {
+				sk.WriteString(" (instructions: read its SKILL.md)")
+			}
+			sk.WriteString("\n")
+		}
+	}
+	if sk.Len() == 0 {
+		sk.WriteString("- (none)\n")
 	}
 	j := "`" + exe + "`"
 	return agentsMarker + `
@@ -63,23 +84,44 @@ The program is ` + j + ` (it may not be on PATH); run it from this folder or pas
 - Check a structured note before you finish: ` + "`check <path>`" + `.
 - Rename with ` + "`rename <from> <to>`" + ` (it updates the links); delete with ` + "`delete <path>`" + `.
 - See what you changed: ` + "`status`, `diff <path>`" + `; history: ` + "`log <path>`, `show <commit> <path>`" + `.
+- Undo everything one session did: ` + "`revert -session <id>`" + ` (without ` + "`-yes`" + ` it only says what it would do).
+- Show the person a note in the editor: ` + "`open <path>[:line]`" + `; ` + "`editor status`" + ` says what they are looking at,
+  ` + "`events watch`" + ` streams what happens in the window. ` + "`link <path> -line <n>`" + ` gives a ` + "`jus://`" + ` link to a place.
+
+## Skills
+
+A skill is a tool this notebook carries: ` + "`.jusnote/skills/<name>/SKILL.md`" + ` says what it does and how to use it;
+a ` + "`skill.json`" + ` beside it (` + "`{\"run\": [\"python\", \"{skill}/make.py\"]}`" + `) makes it runnable with
+` + "`skills run <name>`" + `. Its results go to ` + "`.jusnote/out/<name>/`" + ` (not in git; ` + "`last.log`" + ` is what it printed).
+A skill runs a program, so the first run (and the first after any change to it) needs ` + "`-yes`" + `:
+add it only when the person asked you to run that skill. ` + "`skills list`" + ` shows them.
 
 ## Rules
 
 1. **Do not run git yourself here, and do not commit.** Leave your changes uncommitted with your
    name on them (the ways above do that); the person accepts or discards them in Jusnote, and the
    commit then records that you made them.
-2. **Never edit ` + "`.jusnote/`" + `** except ` + "`.jusnote/types/*.yaml`" + ` when you are asked to change a record type.
+2. **Never edit ` + "`.jusnote/`" + `** except ` + "`.jusnote/types/*.yaml`" + ` when you are asked to change a record type,
+   and ` + "`.jusnote/skills/`" + ` when you are asked to write or change a skill.
 3. **Keep the notes plain Markdown.** Link notes with ` + "`[[note name]]`" + ` (or ` + "`[[folder/note]]`" + `); relative
    Markdown links also work. Images go in an ` + "`attachments/`" + ` folder next to the note.
 4. **Change only what you were asked to.** Keep the author's wording, punctuation and structure;
    run ` + "`diff <path>`" + ` before you finish and make sure nothing else changed.
 5. If a write fails with exit code 3 (conflict), the file changed since you read it: read it again.
+
 ## Record types in this notebook
 
 ` + types.String() + `
 Their rules are in ` + "`.jusnote/types/`" + `; ` + "`" + exe + ` types` + "`" + ` prints them.
-`
+
+## Skills in this notebook
+
+` + sk.String() + `
+## Every command
+
+Made from the same list as ` + "`help -json`" + ` (which also has each one's parameters):
+
+` + commands
 }
 
 // Claude Code reads AGENTS.md itself only when no CLAUDE.md exists in the
@@ -103,9 +145,9 @@ type GuideFile struct {
 // there and was not written by Jusnote is kept unless force. It returns
 // what it did to each file and the paths it wrote (for the caller to
 // commit).
-func (s *Service) WriteAgentGuide(exe string, force bool) ([]GuideFile, []string, error) {
+func (s *Service) WriteAgentGuide(exe string, force bool, commands string) ([]GuideFile, []string, error) {
 	files := map[string]string{
-		"AGENTS.md": agentGuide(exe, s),
+		"AGENTS.md": agentGuide(exe, s, commands),
 		"CLAUDE.md": claudeBridge,
 		"GEMINI.md": geminiBridge,
 	}

@@ -42,6 +42,8 @@ type Notebook struct {
 	vault string
 	swap  safeswap.NS
 	mu    sync.Mutex
+
+	sniffs map[string]sniffed // other files: text or not (files.go)
 }
 
 // Doc is one note file as the list shows it.
@@ -352,14 +354,14 @@ func (nb *Notebook) Link(rel string, line int) string {
 	return juslink.NoteLink(clean, line)
 }
 
-// EnsureLayout creates the vault and its self-ignoring cache and backup
-// folders, and hides the vault in Explorer. Templates and rules added
+// EnsureLayout creates the vault and its self-ignoring cache, backup and
+// out (skills' results) folders, and hides the vault in Explorer. Templates and rules added
 // later live in the vault and are tracked by git; the caches are not.
 func (nb *Notebook) EnsureLayout() error {
 	if err := os.MkdirAll(nb.vault, 0o755); err != nil {
 		return err
 	}
-	for _, d := range []string{"cache", "backup"} {
+	for _, d := range []string{"cache", "backup", "out"} { // out: what the notebook's skills make
 		p := filepath.Join(nb.vault, d)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return err

@@ -112,3 +112,23 @@ func TestCommitMineSkipsUnwritten(t *testing.T) {
 		t.Fatal("want edited.md committed and shown.md not")
 	}
 }
+
+// With the notebook's commit setting manual, leaving a note and closing the
+// window commit nothing; an explicit commit still does.
+func TestManualCommitSetting(t *testing.T) {
+	s, base := start(t)
+	if err := s.svc.NB.SetSettings(notebook.Settings{Commit: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	call(t, "PUT", base+"api/note", `{"path":"m.md","text":"x\n","base":""}`)
+	if code, out := call(t, "POST", base+"api/commit", `{"paths":["m.md"],"mine":true}`); code != 200 || out["committed"] != false {
+		t.Fatalf("leave commit in manual mode: %d %v", code, out)
+	}
+	s.CommitPending()
+	if s.svc.Repo.Tracked("m.md") {
+		t.Fatal("manual mode committed on close")
+	}
+	if code, out := call(t, "POST", base+"api/commit", `{"paths":["m.md"]}`); code != 200 || out["committed"] != true {
+		t.Fatalf("explicit commit in manual mode: %d %v", code, out)
+	}
+}

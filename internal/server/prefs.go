@@ -24,6 +24,7 @@ type Prefs struct {
 	Wrap    bool   `json:"wrap"`    // soft wrap long lines
 	Guides  bool   `json:"guides"`  // rainbow indent guides
 	Numbers bool   `json:"numbers"` // line numbers
+	Files   string `json:"files"`   // the file list: "all" text files, or "notes" only
 }
 
 const (
@@ -36,6 +37,7 @@ var prefChoices = map[string][]string{
 	"lang":  {"zh", "ja"},
 	"theme": {"dark", "light"},
 	"font":  {"sans", "mono"},
+	"files": {"all", "notes"},
 }
 
 func (p *Prefs) field(k string) *string {
@@ -46,6 +48,8 @@ func (p *Prefs) field(k string) *string {
 		return &p.Theme
 	case "font":
 		return &p.Font
+	case "files":
+		return &p.Files
 	}
 	return nil
 }
@@ -80,7 +84,7 @@ type prefStore struct {
 }
 
 func defaults() Prefs {
-	return Prefs{Lang: "zh", Theme: "dark", Font: "sans", Size: sizeDefault, Wrap: true, Guides: true, Numbers: true}
+	return Prefs{Lang: "zh", Theme: "dark", Font: "sans", Size: sizeDefault, Wrap: true, Guides: true, Numbers: true, Files: "all"}
 }
 
 func openPrefs(path string) *prefStore {
@@ -112,7 +116,7 @@ func (s *prefStore) update(b []byte) (Prefs, error) {
 	next := s.p
 	for k, raw := range m {
 		switch k {
-		case "lang", "theme", "font":
+		case "lang", "theme", "font", "files":
 			var v string
 			if err := json.Unmarshal(raw, &v); err != nil || !allowed(k, v) {
 				return Prefs{}, fmt.Errorf("bad preference %s=%s", k, raw)
@@ -121,7 +125,7 @@ func (s *prefStore) update(b []byte) (Prefs, error) {
 		case "size":
 			var v int
 			if err := json.Unmarshal(raw, &v); err != nil {
-				return Prefs{}, err
+				return Prefs{}, fmt.Errorf("bad preference %s=%s (a size in px)", k, raw)
 			}
 			if v < sizeMin {
 				v = sizeMin
@@ -132,15 +136,15 @@ func (s *prefStore) update(b []byte) (Prefs, error) {
 			next.Size = v
 		case "wrap":
 			if err := json.Unmarshal(raw, &next.Wrap); err != nil {
-				return Prefs{}, err
+				return Prefs{}, fmt.Errorf("bad preference %s=%s (true or false)", k, raw)
 			}
 		case "guides":
 			if err := json.Unmarshal(raw, &next.Guides); err != nil {
-				return Prefs{}, err
+				return Prefs{}, fmt.Errorf("bad preference %s=%s (true or false)", k, raw)
 			}
 		case "numbers":
 			if err := json.Unmarshal(raw, &next.Numbers); err != nil {
-				return Prefs{}, err
+				return Prefs{}, fmt.Errorf("bad preference %s=%s (true or false)", k, raw)
 			}
 		default:
 			return Prefs{}, fmt.Errorf("unknown preference %q", k)

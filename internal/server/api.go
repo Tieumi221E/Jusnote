@@ -29,6 +29,17 @@ func (s *Server) routes(mux *http.ServeMux) {
 			h(w, r, svc)
 		}
 	}
+	mux.HandleFunc("POST /api/state", s.handleState)
+	caps := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Caps == nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.Caps.ServeHTTP(w, r)
+	})
+	mux.Handle("GET /api/cap", caps)   // help
+	mux.Handle("GET /api/cap/", caps)  // streams (events.watch)
+	mux.Handle("POST /api/cap/", caps) // calls
 	mux.HandleFunc("GET /api/info", s.handleInfo)
 	mux.HandleFunc("GET /api/recent", s.handleRecent)
 	mux.HandleFunc("POST /api/open", s.handleOpen)
@@ -61,7 +72,6 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/prefs", s.handlePrefsPost)
 	mux.HandleFunc("GET /api/log", s.handleLogGet)
 	mux.HandleFunc("POST /api/log", s.handleLogPost)
-	mux.HandleFunc("POST /api/agents", nb(s.handleAgents))
 	mux.HandleFunc("POST /api/selftest", s.handleSelftest)
 	mux.HandleFunc("POST /api/selftest/outside", nb(s.handleSelftestOutside))
 }
@@ -112,12 +122,14 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		ok(w, []notebook.Doc{})
 		return
 	}
-	docs, err := svc.NB.List()
+	// The notes and the other text files (notebook.Files): the page shows
+	// what the files preference says; links and completion use the notes.
+	files, err := svc.NB.Files()
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	ok(w, orEmpty(docs))
+	ok(w, orEmpty(files))
 }
 
 func (s *Server) handleNoteGet(w http.ResponseWriter, r *http.Request, svc *service.Service) {
@@ -127,11 +139,15 @@ func (s *Server) handleNoteGet(w http.ResponseWriter, r *http.Request, svc *serv
 		fail(w, err)
 		return
 	}
+	// Text not in UTF-8 (an old GBK or Shift-JIS file) is read in its own
+	// encoding, for showing: the editor opens it read-only (notebook.Files).
+	shown, enc := notebook.TextOf(text)
 	ok(w, map[string]any{
-		"path":    path,
-		"text":    string(text),
-		"version": notebook.VersionOf(text),
-		"tracked": svc.Repo != nil && svc.Repo.Tracked(path),
+		"path":     path,
+		"text":     shown,
+		"encoding": enc,
+		"version":  notebook.VersionOf(text),
+		"tracked":  svc.Repo != nil && svc.Repo.Tracked(path),
 	})
 }
 
@@ -566,32 +582,6 @@ func (s *Server) handleLogPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Printf("page: %s", m)
 	ok(w, map[string]bool{"ok": true})
-}
-
-// handleAgents writes the agent guide into the notebook (as `jusnote
-// agents` does) and commits what it wrote.
-func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request, svc *service.Service) {
-	var in struct{ Force bool }
-	if !decode(w, r, &in) {
-		return
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		exe = "jusnote"
-	}
-	files, written, err := svc.WriteAgentGuide(filepath.Clean(exe), in.Force)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	h, did := "", false
-	if len(written) > 0 && svc.Repo != nil {
-		if h, did, err = svc.Commit("jusnote: agent guide", history.Provenance{}, written...); err != nil {
-			fail(w, err)
-			return
-		}
-	}
-	ok(w, map[string]any{"files": files, "committed": did, "hash": h})
 }
 
 // handleSelftest hands the page's selftest report to the process.

@@ -14,11 +14,12 @@ import (
 )
 
 // Provenance says who made a change, written as git trailers so any git
-// tool shows it and an agent's run can be traced (docs/architecture.md).
+// tool shows it and an agent's run can be traced.
 type Provenance struct {
-	Author string `json:"author,omitempty"` // "human" or "agent"
-	Model  string `json:"model,omitempty"`  // "<provider>/<model>"
-	Run    string `json:"run,omitempty"`    // the agent's session or run id
+	Author  string `json:"author,omitempty"`  // "human" or "agent"
+	Harness string `json:"harness,omitempty"` // the agent's harness: codex, claude-code …
+	Model   string `json:"model,omitempty"`   // "<provider>/<model>"
+	Run     string `json:"run,omitempty"`     // the harness's session id
 }
 
 // Message appends p to subject as trailers; an empty p changes nothing.
@@ -26,6 +27,9 @@ func (p Provenance) Message(subject string) string {
 	var t []string
 	if p.Author != "" {
 		t = append(t, "Jus-Author: "+oneLine(p.Author))
+	}
+	if p.Harness != "" {
+		t = append(t, "Jus-Harness: "+oneLine(p.Harness))
 	}
 	if p.Model != "" {
 		t = append(t, "Jus-Model: "+oneLine(p.Model))
@@ -60,6 +64,8 @@ func parseMessage(msg string) (string, Provenance) {
 			switch strings.TrimSpace(k) {
 			case "Jus-Author":
 				p.Author = v
+			case "Jus-Harness":
+				p.Harness = v
 			case "Jus-Model":
 				p.Model = v
 			case "Jus-Run":
@@ -299,4 +305,45 @@ func toCommit(c *object.Commit) Commit {
 		Author:  c.Author.Name,
 		Source:  p,
 	}
+}
+
+// Changed is what commit hash changed: the paths whose content differs
+// from its first parent's (added, changed or removed), and that parent's
+// hash ("" for the first commit).
+func (rp *Repo) Changed(hash string) (paths []string, parent string, err error) {
+	h, err := rp.resolve(hash)
+	if err != nil {
+		return nil, "", err
+	}
+	c, err := rp.r.CommitObject(h)
+	if err != nil {
+		return nil, "", err
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return nil, "", err
+	}
+	var before *object.Tree
+	if c.NumParents() > 0 {
+		p, err := c.Parent(0)
+		if err != nil {
+			return nil, "", err
+		}
+		parent = p.Hash.String()
+		if before, err = p.Tree(); err != nil {
+			return nil, "", err
+		}
+	}
+	changes, err := object.DiffTree(before, tree)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, ch := range changes {
+		name := ch.To.Name
+		if name == "" {
+			name = ch.From.Name
+		}
+		paths = append(paths, name) // slash-separated, as the notebook names files
+	}
+	return paths, parent, nil
 }

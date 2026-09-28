@@ -1,4 +1,4 @@
-/* Jusnote appearance, aligned with Jusplay (docs/design-language.md):
+/* Jusnote appearance, aligned with Jusplay:
    one glass with an inner highlight, the two materials day/night, five
    radii, five font sizes, spacing on a 4-grid, and two springs. Controls
    float over the content and never blur it. */
@@ -142,6 +142,8 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 #files li:hover { background: var(--field); color: var(--fg); }
 #files li.active { background: var(--field-hover); color: var(--fg); font-weight: 600; }
 #files li.file { padding-left: calc(32px + var(--depth, 0) * 16px); }
+/* Other text files beside the notes: listed, quieter. */
+#files li.file.text { color: var(--muted, #8a93a6); font-size: .92em; }
 #files li.changed::after { content: ""; flex: none; width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--warn); }
 #files li.dir svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
   transition: transform var(--spring-snappy-t) var(--spring-snappy); }
@@ -363,6 +365,9 @@ button.wide:hover { background: var(--field-hover); }
 
 #preview a.wikilink { color: var(--accent); border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
 #preview a.wikilink:hover { text-decoration: none; border-bottom-color: var(--accent); }
+/* Links to other Jus apps: a mark of the app; muted when it cannot open them. */
+#preview a.jus-play::before { content: "\25B6\FE0E"; font-size: .75em; margin-right: .3em; opacity: .7; }
+#preview a.jus-missing { color: var(--muted, #8a93a6); text-decoration: line-through dotted; }
 #preview .math-block { margin: 0 0 1em; overflow-x: auto; overflow-y: hidden; }
 #preview .katex { font-size: 1.08em; }
 #preview li:has(> input[type=checkbox]) input { cursor: pointer; }

@@ -104,10 +104,51 @@ Say ""
 Say "## Page selftest (real WebView2 window, test notebook copy)"
 Say ""
 & "$root\build.ps1" | Out-Null
+
+# The process tree of a window: jusnote.exe and everything under it (the
+# WebView2 browser, renderer, GPU and utility processes).
+function TreeOf([int]$rootPid) {
+    $all = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, WorkingSetSize, PrivatePageCount
+    $tree = @{ [uint32]$rootPid = $true }
+    do {
+        $grew = $false
+        foreach ($p in $all) { if ($tree.ContainsKey([uint32]$p.ParentProcessId) -and -not $tree.ContainsKey([uint32]$p.ProcessId)) { $tree[[uint32]$p.ProcessId] = $true; $grew = $true } }
+    } while ($grew)
+    @($all | Where-Object { $tree.ContainsKey([uint32]$_.ProcessId) })
+}
+
+# Idle: the window with a note open, 10 s after it announced itself.
+$inb = Join-Path $work 'idle'
+Copy-Item -Recurse testdata\notebook $inb
+$idata = Join-Path $work 'idle-data'
+$iproc = Start-Process "$root\bin\jusnote.exe" -ArgumentList 'gui', '-notebook', $inb, '-data', $idata -PassThru
+for ($i = 0; $i -lt 100 -and -not (Test-Path (Join-Path $idata 'instance.json')); $i++) { Start-Sleep -Milliseconds 100 }
+Start-Sleep -Seconds 10
+$idle = TreeOf $iproc.Id
+$idleWS = ($idle | Measure-Object WorkingSetSize -Sum).Sum
+$idlePriv = ($idle | Measure-Object PrivatePageCount -Sum).Sum
+$idleApp = ($idle | Where-Object ProcessId -eq $iproc.Id | Measure-Object WorkingSetSize -Sum).Sum
+foreach ($p in $idle) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+
 $snb = Join-Path $work 'selftest'
 Copy-Item -Recurse testdata\notebook $snb
 $report = Join-Path $work 'selftest.json'
-$proc = Start-Process "$root\bin\jusnote.exe" -ArgumentList 'gui', '-selftest', '-notebook', $snb, '-data', (Join-Path $work 'data') -RedirectStandardOutput $report -RedirectStandardError (Join-Path $work 'selftest.err') -PassThru -Wait
+$proc = Start-Process "$root\bin\jusnote.exe" -ArgumentList 'gui', '-selftest', '-notebook', $snb, '-data', (Join-Path $work 'data') -RedirectStandardOutput $report -RedirectStandardError (Join-Path $work 'selftest.err') -PassThru
+# The window's memory while the selftest runs: jusnote.exe and every
+# process under it (the WebView2 browser, renderer, GPU and utility
+# processes), sampled every 250 ms; the peak of the sum.
+$peakWS = 0; $peakPriv = 0; $peakApp = 0; $procs = 0; $samples = 0
+while (-not $proc.HasExited) {
+    $mine = TreeOf $proc.Id
+    $ws = ($mine | Measure-Object WorkingSetSize -Sum).Sum
+    $priv = ($mine | Measure-Object PrivatePageCount -Sum).Sum
+    $app = ($mine | Where-Object ProcessId -eq $proc.Id | Measure-Object WorkingSetSize -Sum).Sum
+    if ($ws -gt $peakWS) { $peakWS = $ws; $procs = $mine.Count }
+    if ($priv -gt $peakPriv) { $peakPriv = $priv }
+    if ($app -gt $peakApp) { $peakApp = $app }
+    $samples++
+    Start-Sleep -Milliseconds 250
+}
 $j = Get-Content $report -Raw | ConvertFrom-Json
 Say "Environment: $($j.env.ua -replace '.*(Edg/[\d.]+).*', '$1'), DPR $($j.env.dpr), viewport $($j.env.viewport), JS heap $($j.env.jsHeapMB) MB (of $($j.env.jsHeapTotalMB) MB). $($j.note)."
 Say ""
@@ -119,6 +160,15 @@ Say ""
 Say "| timing | n | p50 | p95 | max |"
 Say "|---|---:|---:|---:|---:|"
 foreach ($t in $j.timings.PSObject.Properties) { Say "| $($t.Name) | $($t.Value.n) | $($t.Value.p50) ms | $($t.Value.p95) ms | $($t.Value.max) ms |" }
+Say ""
+$mb = { param($b) [math]::Round($b / 1MB, 1) }
+Say "| window memory (jusnote.exe + WebView2) | idle, a note open ($($idle.Count) processes) | peak during the selftest ($procs processes, $samples samples) |"
+Say "|---|---:|---:|"
+Say "| working set | $(& $mb $idleWS) MB | $(& $mb $peakWS) MB |"
+Say "| private bytes | $(& $mb $idlePriv) MB | $(& $mb $peakPriv) MB |"
+Say "| jusnote.exe alone, working set | $(& $mb $idleApp) MB | $(& $mb $peakApp) MB |"
+Say ""
+Say "The selftest peak includes a 1 MB note, its preview (1 MB of rendered Markdown) and every kind of operation; it is a stress figure, not daily use."
 # The selftest leaves one edit written but uncommitted; closing the window
 # must have committed it.
 $left = & $cli status -notebook $snb -json | ConvertFrom-Json
